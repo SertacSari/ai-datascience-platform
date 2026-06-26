@@ -1,0 +1,39 @@
+.DS_Store
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+backend/venv/
+backend/app/venv/
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+!backend/.env.example
+backend/.env
+
+# Local uploads and generated files
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# Databases and logs
+*.sqlite
+*.sqlite3
+*.db
+*.log
