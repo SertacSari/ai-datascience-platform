@@ -14,6 +14,7 @@ class Dataset(Base):
 
     file_name = Column(String(255), nullable=False)
     file_path = Column(String(500), nullable=False)
+    cleaned_file_path = Column(String(500), nullable=True)
     row_count = Column(Integer, nullable=False)
     column_count = Column(Integer, nullable=False)
     uploaded_at = Column(DateTime, default=datetime.utcnow, nullable=False)

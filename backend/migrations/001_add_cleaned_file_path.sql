@@ -1,0 +1,2 @@
+ALTER TABLE datasets
+ADD COLUMN IF NOT EXISTS cleaned_file_path VARCHAR(500);

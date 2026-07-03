@@ -166,3 +166,216 @@ def get_dataset_preview(
         "duplicate_rows": duplicate_rows,
         "summary_statistics": summary_statistics,
     }
+
+def detect_column_types(df: pd.DataFrame) -> dict[str, str]:
+    column_types = {}
+
+    for column in df.columns:
+        if pd.api.types.is_bool_dtype(df[column]):
+            column_types[column] = "boolean"
+        elif pd.api.types.is_datetime64_any_dtype(df[column]):
+            column_types[column] = "datetime"
+        elif pd.api.types.is_numeric_dtype(df[column]):
+            column_types[column] = "numerical"
+        else:
+            column_types[column] = "categorical"
+
+    return column_types
+
+
+def detect_missing_values(df: pd.DataFrame) -> dict[str, int]:
+    missing_values = {}
+
+    for column in df.columns:
+        missing_values[column] = int(df[column].isna().sum())
+
+    return missing_values
+
+
+def detect_duplicates(df: pd.DataFrame) -> int:
+    return int(df.duplicated().sum())
+
+
+def build_cleaning_issues(
+    df: pd.DataFrame,
+    column_types: dict[str, str],
+    missing_values: dict[str, int],
+    duplicate_rows: int,
+) -> list[dict]:
+    issues = []
+
+    for column, missing_count in missing_values.items():
+        if missing_count > 0:
+            column_type = column_types[column]
+
+            if column_type == "numerical":
+                recommended_action = "Fill missing values with median"
+            elif column_type == "categorical":
+                recommended_action = "Fill missing values with mode"
+            else:
+                recommended_action = "Fill missing values with most common value"
+
+            issues.append(
+                {
+                    "column": column,
+                    "issue_type": "missing_values",
+                    "details": f"{missing_count} missing value(s) found",
+                    "recommended_action": recommended_action,
+                }
+            )
+
+    if duplicate_rows > 0:
+        issues.append(
+            {
+                "column": None,
+                "issue_type": "duplicate_rows",
+                "details": f"{duplicate_rows} duplicate row(s) found",
+                "recommended_action": "Remove duplicate rows",
+            }
+        )
+
+    return issues
+
+
+def get_cleaning_report(
+    db: Session,
+    dataset_id: int,
+    current_user: User,
+) -> dict:
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+
+    if not dataset:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dataset not found",
+        )
+
+    if dataset.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to access this dataset",
+        )
+
+    if not Path(dataset.file_path).is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dataset file not found on server",
+        )
+
+    df = read_dataset_file(dataset.file_path)
+
+    column_types = detect_column_types(df)
+    missing_values = detect_missing_values(df)
+    duplicate_rows = detect_duplicates(df)
+
+    issues = build_cleaning_issues(
+        df=df,
+        column_types=column_types,
+        missing_values=missing_values,
+        duplicate_rows=duplicate_rows,
+    )
+
+    return {
+        "dataset_id": dataset.id,
+        "file_name": dataset.file_name,
+        "row_count": int(df.shape[0]),
+        "column_count": int(df.shape[1]),
+        "column_types": column_types,
+        "missing_values": missing_values,
+        "duplicate_rows": duplicate_rows,
+        "issues": issues,
+        "ready_for_ml": len(issues) == 0,
+    }
+
+
+def clean_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    original_duplicate_count = int(df.duplicated().sum())
+
+    cleaned_df = df.drop_duplicates().copy()
+
+    column_types = detect_column_types(cleaned_df)
+
+    for column in cleaned_df.columns:
+        missing_count = int(cleaned_df[column].isna().sum())
+
+        if missing_count == 0:
+            continue
+
+        if column_types[column] == "numerical":
+            fill_value = cleaned_df[column].median()
+            if pd.isna(fill_value):
+                fill_value = 0
+        else:
+            mode_values = cleaned_df[column].mode()
+            fill_value = mode_values.iloc[0] if not mode_values.empty else "Unknown"
+
+        cleaned_df[column] = cleaned_df[column].fillna(fill_value)
+
+    return cleaned_df, original_duplicate_count
+
+
+def save_cleaned_dataset_file(
+    cleaned_df: pd.DataFrame,
+    original_file_path: str,
+) -> str:
+    original_path = Path(original_file_path)
+    cleaned_file_path = original_path.with_name(f"cleaned_{original_path.stem}.csv")
+
+    cleaned_df.to_csv(cleaned_file_path, index=False)
+
+    return str(cleaned_file_path)
+
+
+def clean_dataset(
+    db: Session,
+    dataset_id: int,
+    current_user: User,
+) -> dict:
+    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+
+    if not dataset:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dataset not found",
+        )
+
+    if dataset.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to clean this dataset",
+        )
+
+    if not Path(dataset.file_path).is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dataset file not found on server",
+        )
+
+    df = read_dataset_file(dataset.file_path)
+    original_row_count = int(df.shape[0])
+
+    cleaned_df, removed_duplicate_rows = clean_dataframe(df)
+
+    cleaned_file_path = save_cleaned_dataset_file(
+        cleaned_df=cleaned_df,
+        original_file_path=dataset.file_path,
+    )
+
+    try:
+        dataset.cleaned_file_path = cleaned_file_path
+        db.commit()
+        db.refresh(dataset)
+    except Exception:
+        db.rollback()
+        Path(cleaned_file_path).unlink(missing_ok=True)
+        raise
+
+    return {
+        "dataset_id": dataset.id,
+        "original_file_path": dataset.file_path,
+        "cleaned_file_path": cleaned_file_path,
+        "original_row_count": original_row_count,
+        "cleaned_row_count": int(cleaned_df.shape[0]),
+        "removed_duplicate_rows": removed_duplicate_rows,
+        "message": "Dataset cleaned successfully",
+    }
