@@ -5,6 +5,10 @@ psycopg2-binary
 python-dotenv
 pandas
 python-multipart
-passlib
-bcrypt
+passlib[bcrypt]
+bcrypt==4.0.1
 python-jose
+email-validator
+openpyxl
+xlrd
+pydantic

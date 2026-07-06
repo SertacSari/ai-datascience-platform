@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import BaseModel
 
@@ -8,7 +8,6 @@ class DatasetResponse(BaseModel):
     id: int
     user_id: int
     file_name: str
-    file_path: str
     row_count: int
     column_count: int
     uploaded_at: datetime
@@ -37,7 +36,7 @@ class DatasetPreviewResponse(BaseModel):
 
 
 class CleaningIssue(BaseModel):
-    column: str | None = None
+    column: Optional[str] = None
     issue_type: str
     details: str
     recommended_action: str
@@ -50,6 +49,7 @@ class CleaningReportResponse(BaseModel):
     column_count: int
     column_types: dict[str, str]
     missing_values: dict[str, int]
+    infinite_values: dict[str, int]
     duplicate_rows: int
     issues: list[CleaningIssue]
     ready_for_ml: bool
@@ -57,8 +57,6 @@ class CleaningReportResponse(BaseModel):
 
 class CleanDatasetResponse(BaseModel):
     dataset_id: int
-    original_file_path: str
-    cleaned_file_path: str
     original_row_count: int
     cleaned_row_count: int
     removed_duplicate_rows: int

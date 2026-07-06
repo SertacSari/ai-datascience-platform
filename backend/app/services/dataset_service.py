@@ -1,5 +1,6 @@
 import json
-import shutil
+import os
+import zipfile
 from pathlib import Path
 from uuid import uuid4
 
@@ -12,6 +13,49 @@ from app.models.user import User
 
 
 UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads"
+MAX_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_UPLOAD_SIZE_MB", "50")) * 1024 * 1024
+MAX_DATAFRAME_MEMORY_BYTES = (
+    int(os.getenv("MAX_DATAFRAME_MEMORY_MB", "200")) * 1024 * 1024
+)
+UPLOAD_CHUNK_SIZE_BYTES = 1024 * 1024
+CSV_CHUNK_SIZE_ROWS = 10_000
+
+
+def get_dataframe_memory_usage(df: pd.DataFrame) -> int:
+    return int(df.memory_usage(index=True, deep=True).sum())
+
+
+def ensure_dataframe_fits_memory_limit(memory_usage_bytes: int) -> None:
+    if memory_usage_bytes > MAX_DATAFRAME_MEMORY_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail="Dataset requires more memory than the allowed limit",
+        )
+
+
+def read_csv_with_memory_limit(file_path: str) -> pd.DataFrame:
+    chunks = []
+    memory_usage_bytes = 0
+
+    for chunk in pd.read_csv(file_path, chunksize=CSV_CHUNK_SIZE_ROWS):
+        memory_usage_bytes += get_dataframe_memory_usage(chunk)
+        ensure_dataframe_fits_memory_limit(memory_usage_bytes)
+        chunks.append(chunk)
+
+    if not chunks:
+        return pd.read_csv(file_path)
+
+    return pd.concat(chunks, ignore_index=True)
+
+
+def validate_excel_expanded_size(file_path: str) -> None:
+    if not zipfile.is_zipfile(file_path):
+        return
+
+    with zipfile.ZipFile(file_path) as workbook:
+        expanded_size = sum(entry.file_size for entry in workbook.infolist())
+
+    ensure_dataframe_fits_memory_limit(expanded_size)
 
 
 def read_dataset_file(file_path: str) -> pd.DataFrame:
@@ -19,10 +63,13 @@ def read_dataset_file(file_path: str) -> pd.DataFrame:
 
     try:
         if file_extension == ".csv":
-            return pd.read_csv(file_path)
+            return read_csv_with_memory_limit(file_path)
 
         if file_extension in {".xlsx", ".xls"}:
-            return pd.read_excel(file_path)
+            validate_excel_expanded_size(file_path)
+            df = pd.read_excel(file_path)
+            ensure_dataframe_fits_memory_limit(get_dataframe_memory_usage(df))
+            return df
 
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -63,20 +110,25 @@ def upload_dataset(db: Session, file: UploadFile, current_user: User) -> Dataset
 
     try:
         with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            uploaded_bytes = 0
+            while chunk := file.file.read(UPLOAD_CHUNK_SIZE_BYTES):
+                uploaded_bytes += len(chunk)
+                if uploaded_bytes > MAX_UPLOAD_SIZE_BYTES:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                        detail="Uploaded file exceeds the maximum allowed size",
+                    )
+                buffer.write(chunk)
 
         try:
-            if file_extension == ".csv":
-                df = pd.read_csv(file_path)
-            else:
-                df = pd.read_excel(file_path)
-        except Exception:
-            file_path.unlink(missing_ok=True)
-
+            df = read_dataset_file(str(file_path))
+        except HTTPException:
+            raise
+        except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Uploaded file could not be read as a valid CSV or Excel file",
-            )
+            ) from exc
 
         row_count, column_count = df.shape
 
@@ -88,17 +140,19 @@ def upload_dataset(db: Session, file: UploadFile, current_user: User) -> Dataset
             column_count=column_count,
         )
 
-        try:
-            db.add(new_dataset)
-            db.commit()
-            db.refresh(new_dataset)
-        except Exception:
-            db.rollback()
-            file_path.unlink(missing_ok=True)
-            raise
+        db.add(new_dataset)
+        db.commit()
+        db.refresh(new_dataset)
 
         return new_dataset
 
+    except HTTPException:
+        file_path.unlink(missing_ok=True)
+        raise
+    except Exception:
+        db.rollback()
+        file_path.unlink(missing_ok=True)
+        raise
     finally:
         file.file.close()
 
@@ -192,14 +246,27 @@ def detect_missing_values(df: pd.DataFrame) -> dict[str, int]:
     return missing_values
 
 
+def detect_infinite_values(df: pd.DataFrame) -> dict[str, int]:
+    infinite_values = {}
+
+    for column in df.columns:
+        if pd.api.types.is_numeric_dtype(df[column]):
+            count = int(df[column].isin([float("inf"), float("-inf")]).sum())
+        else:
+            count = 0
+        infinite_values[column] = count
+
+    return infinite_values
+
+
 def detect_duplicates(df: pd.DataFrame) -> int:
     return int(df.duplicated().sum())
 
 
 def build_cleaning_issues(
-    df: pd.DataFrame,
     column_types: dict[str, str],
     missing_values: dict[str, int],
+    infinite_values: dict[str, int],
     duplicate_rows: int,
 ) -> list[dict]:
     issues = []
@@ -221,6 +288,17 @@ def build_cleaning_issues(
                     "issue_type": "missing_values",
                     "details": f"{missing_count} missing value(s) found",
                     "recommended_action": recommended_action,
+                }
+            )
+
+    for column, infinite_count in infinite_values.items():
+        if infinite_count > 0:
+            issues.append(
+                {
+                    "column": column,
+                    "issue_type": "infinite_values",
+                    "details": f"{infinite_count} infinite value(s) found",
+                    "recommended_action": "Replace infinite values and fill with median",
                 }
             )
 
@@ -266,12 +344,13 @@ def get_cleaning_report(
 
     column_types = detect_column_types(df)
     missing_values = detect_missing_values(df)
+    infinite_values = detect_infinite_values(df)
     duplicate_rows = detect_duplicates(df)
 
     issues = build_cleaning_issues(
-        df=df,
         column_types=column_types,
         missing_values=missing_values,
+        infinite_values=infinite_values,
         duplicate_rows=duplicate_rows,
     )
 
@@ -282,6 +361,7 @@ def get_cleaning_report(
         "column_count": int(df.shape[1]),
         "column_types": column_types,
         "missing_values": missing_values,
+        "infinite_values": infinite_values,
         "duplicate_rows": duplicate_rows,
         "issues": issues,
         "ready_for_ml": len(issues) == 0,
@@ -294,6 +374,13 @@ def clean_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     cleaned_df = df.drop_duplicates().copy()
 
     column_types = detect_column_types(cleaned_df)
+
+    for column, column_type in column_types.items():
+        if column_type == "numerical":
+            cleaned_df[column] = cleaned_df[column].replace(
+                [float("inf"), float("-inf")],
+                float("nan"),
+            )
 
     for column in cleaned_df.columns:
         missing_count = int(cleaned_df[column].isna().sum())
@@ -372,8 +459,6 @@ def clean_dataset(
 
     return {
         "dataset_id": dataset.id,
-        "original_file_path": dataset.file_path,
-        "cleaned_file_path": cleaned_file_path,
         "original_row_count": original_row_count,
         "cleaned_row_count": int(cleaned_df.shape[0]),
         "removed_duplicate_rows": removed_duplicate_rows,
