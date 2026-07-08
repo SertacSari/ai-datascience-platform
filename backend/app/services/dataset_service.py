@@ -1,6 +1,8 @@
+import csv
 import json
 import os
 import zipfile
+from itertools import chain
 from pathlib import Path
 from uuid import uuid4
 
@@ -19,6 +21,89 @@ MAX_DATAFRAME_MEMORY_BYTES = (
 )
 UPLOAD_CHUNK_SIZE_BYTES = 1024 * 1024
 CSV_CHUNK_SIZE_ROWS = 10_000
+CSV_CONCATENATION_MEMORY_FACTOR = 2
+
+
+class DatasetReadError(Exception):
+    """Raised when a dataset cannot be parsed or read from storage."""
+
+
+class DatasetMemoryLimitError(DatasetReadError):
+    """Raised when reading a dataset would exceed the configured memory limit."""
+
+
+def ensure_unique_header_values(header_values: list[object]) -> None:
+    normalized_headers = [str(value) for value in header_values]
+
+    if len(normalized_headers) != len(set(normalized_headers)):
+        raise DatasetReadError(
+            "Dataset contains duplicate or ambiguous column names"
+        )
+
+
+def read_csv_header(file_path: str) -> list[object]:
+    with open(file_path, encoding="utf-8-sig", newline="") as dataset_file:
+        for line in dataset_file:
+            if line.strip():
+                return next(csv.reader(chain([line], dataset_file)), [])
+
+    return []
+
+
+def read_xlsx_header(file_path: str) -> list[object]:
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(file_path, read_only=True, data_only=True)
+    try:
+        if not workbook.worksheets:
+            return []
+        worksheet = workbook.worksheets[0]
+        return list(
+            next(
+                worksheet.iter_rows(min_row=1, max_row=1, values_only=True),
+                (),
+            )
+        )
+    finally:
+        workbook.close()
+
+
+def read_xls_header(file_path: str) -> list[object]:
+    import xlrd
+
+    workbook = xlrd.open_workbook(file_path, on_demand=True)
+    try:
+        if workbook.nsheets == 0:
+            return []
+        worksheet = workbook.sheet_by_index(0)
+        return worksheet.row_values(0) if worksheet.nrows else []
+    finally:
+        workbook.release_resources()
+
+
+def validate_raw_dataset_headers(file_path: str, file_extension: str) -> None:
+    if file_extension == ".csv":
+        header_values = read_csv_header(file_path)
+    elif file_extension == ".xlsx":
+        header_values = read_xlsx_header(file_path)
+    elif file_extension == ".xls":
+        header_values = read_xls_header(file_path)
+    else:
+        raise DatasetReadError("Unsupported dataset file format")
+
+    ensure_unique_header_values(header_values)
+
+
+def normalize_dataframe_columns(df: pd.DataFrame) -> pd.DataFrame:
+    normalized_columns = [str(column) for column in df.columns]
+
+    if len(normalized_columns) != len(set(normalized_columns)):
+        raise DatasetReadError(
+            "Dataset contains ambiguous column names after converting them to text"
+        )
+
+    df.columns = normalized_columns
+    return df
 
 
 def get_dataframe_memory_usage(df: pd.DataFrame) -> int:
@@ -27,9 +112,8 @@ def get_dataframe_memory_usage(df: pd.DataFrame) -> int:
 
 def ensure_dataframe_fits_memory_limit(memory_usage_bytes: int) -> None:
     if memory_usage_bytes > MAX_DATAFRAME_MEMORY_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-            detail="Dataset requires more memory than the allowed limit",
+        raise DatasetMemoryLimitError(
+            "Dataset requires more memory than the configured limit"
         )
 
 
@@ -39,13 +123,17 @@ def read_csv_with_memory_limit(file_path: str) -> pd.DataFrame:
 
     for chunk in pd.read_csv(file_path, chunksize=CSV_CHUNK_SIZE_ROWS):
         memory_usage_bytes += get_dataframe_memory_usage(chunk)
-        ensure_dataframe_fits_memory_limit(memory_usage_bytes)
+        ensure_dataframe_fits_memory_limit(
+            memory_usage_bytes * CSV_CONCATENATION_MEMORY_FACTOR
+        )
         chunks.append(chunk)
 
     if not chunks:
         return pd.read_csv(file_path)
 
-    return pd.concat(chunks, ignore_index=True)
+    dataframe = pd.concat(chunks, ignore_index=True)
+    ensure_dataframe_fits_memory_limit(get_dataframe_memory_usage(dataframe))
+    return dataframe
 
 
 def validate_excel_expanded_size(file_path: str) -> None:
@@ -62,28 +150,59 @@ def read_dataset_file(file_path: str) -> pd.DataFrame:
     file_extension = Path(file_path).suffix.lower()
 
     try:
+        if file_extension == ".xlsx":
+            validate_excel_expanded_size(file_path)
+
+        validate_raw_dataset_headers(file_path, file_extension)
+
         if file_extension == ".csv":
-            return read_csv_with_memory_limit(file_path)
+            return normalize_dataframe_columns(read_csv_with_memory_limit(file_path))
 
         if file_extension in {".xlsx", ".xls"}:
-            validate_excel_expanded_size(file_path)
             df = pd.read_excel(file_path)
             ensure_dataframe_fits_memory_limit(get_dataframe_memory_usage(df))
-            return df
+            return normalize_dataframe_columns(df)
 
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unsupported file format",
-        )
+        raise DatasetReadError("Unsupported dataset file format")
 
-    except HTTPException:
+    except DatasetReadError:
         raise
 
     except Exception as exc:
+        raise DatasetReadError("Dataset file could not be read") from exc
+
+
+def read_stored_dataset_file(file_path: str) -> pd.DataFrame:
+    try:
+        return read_dataset_file(file_path)
+    except DatasetReadError as exc:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Dataset file could not be read",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Stored dataset could not be read",
         ) from exc
+
+
+def get_owned_dataset(
+    db: Session,
+    dataset_id: int,
+    current_user: User,
+) -> Dataset:
+    dataset = (
+        db.query(Dataset)
+        .filter(
+            Dataset.id == dataset_id,
+            Dataset.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if dataset is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dataset not found",
+        )
+
+    return dataset
 
 
 def upload_dataset(db: Session, file: UploadFile, current_user: User) -> Dataset:
@@ -122,9 +241,12 @@ def upload_dataset(db: Session, file: UploadFile, current_user: User) -> Dataset
 
         try:
             df = read_dataset_file(str(file_path))
-        except HTTPException:
-            raise
-        except Exception as exc:
+        except DatasetMemoryLimitError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail="Dataset requires more memory than the allowed limit",
+            ) from exc
+        except DatasetReadError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Uploaded file could not be read as a valid CSV or Excel file",
@@ -162,19 +284,7 @@ def get_dataset_preview(
     dataset_id: int,
     current_user: User,
 ) -> dict:
-    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
-
-    if not dataset:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Dataset not found",
-        )
-
-    if dataset.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to access this dataset",
-        )
+    dataset = get_owned_dataset(db, dataset_id, current_user)
 
     if not Path(dataset.file_path).is_file():
         raise HTTPException(
@@ -182,7 +292,7 @@ def get_dataset_preview(
             detail="Dataset file not found on server",
         )
 
-    df = read_dataset_file(dataset.file_path)
+    df = read_stored_dataset_file(dataset.file_path)
 
     preview_df = df.head(10)
 
@@ -220,6 +330,7 @@ def get_dataset_preview(
         "duplicate_rows": duplicate_rows,
         "summary_statistics": summary_statistics,
     }
+
 
 def detect_column_types(df: pd.DataFrame) -> dict[str, str]:
     column_types = {}
@@ -320,19 +431,7 @@ def get_cleaning_report(
     dataset_id: int,
     current_user: User,
 ) -> dict:
-    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
-
-    if not dataset:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Dataset not found",
-        )
-
-    if dataset.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to access this dataset",
-        )
+    dataset = get_owned_dataset(db, dataset_id, current_user)
 
     if not Path(dataset.file_path).is_file():
         raise HTTPException(
@@ -340,7 +439,7 @@ def get_cleaning_report(
             detail="Dataset file not found on server",
         )
 
-    df = read_dataset_file(dataset.file_path)
+    df = read_stored_dataset_file(dataset.file_path)
 
     column_types = detect_column_types(df)
     missing_values = detect_missing_values(df)
@@ -418,19 +517,7 @@ def clean_dataset(
     dataset_id: int,
     current_user: User,
 ) -> dict:
-    dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
-
-    if not dataset:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Dataset not found",
-        )
-
-    if dataset.user_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to clean this dataset",
-        )
+    dataset = get_owned_dataset(db, dataset_id, current_user)
 
     if not Path(dataset.file_path).is_file():
         raise HTTPException(
@@ -438,7 +525,7 @@ def clean_dataset(
             detail="Dataset file not found on server",
         )
 
-    df = read_dataset_file(dataset.file_path)
+    df = read_stored_dataset_file(dataset.file_path)
     original_row_count = int(df.shape[0])
 
     cleaned_df, removed_duplicate_rows = clean_dataframe(df)

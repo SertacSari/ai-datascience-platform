@@ -1,20 +1,17 @@
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class DatasetResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     id: int
     user_id: int
     file_name: str
     row_count: int
     column_count: int
     uploaded_at: datetime
-
-    class Config:
-        from_attributes = True
-
 
 class ColumnInfo(BaseModel):
     name: str

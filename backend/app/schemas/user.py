@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 MAX_BCRYPT_PASSWORD_BYTES = 72
 
@@ -19,10 +19,8 @@ class UserCreate(BaseModel):
 
 
 class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     id: int
     username: str
     email: EmailStr
     created_at: datetime
-
-    class Config:
-        from_attributes = True
