@@ -37,3 +37,7 @@ backend/uploads/*
 *.sqlite3
 *.db
 *.log
+
+# Frontend
+node_modules/
+dist/
