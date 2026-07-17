@@ -1,22 +1,13 @@
-import os
 from typing import Optional
 
-from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
+from app.config import ALGORITHM, SECRET_KEY
 from app.database import get_db
 from app.models.user import User
-
-load_dotenv()
-
-SECRET_KEY = os.getenv("SECRET_KEY")
-ALGORITHM = os.getenv("ALGORITHM", "HS256")
-
-if not SECRET_KEY:
-    raise RuntimeError("SECRET_KEY environment variable is required")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 

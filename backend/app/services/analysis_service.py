@@ -7,35 +7,12 @@ from sqlalchemy.orm import Session
 
 from app.models.analysis_job import AnalysisJob
 from app.models.dataset import Dataset
+from app.models.enums import JobStatus, TaskType
 from app.models.user import User
-from app.schemas.analysis import TaskType
-from app.services.dataset_service import read_stored_dataset_file
+from app.services.dataset_service import get_owned_dataset, read_stored_dataset_file
 
 
-VALID_TASK_TYPES = {"classification", "regression", "forecasting"}
-
-
-def get_user_dataset(
-    db: Session,
-    dataset_id: int,
-    current_user: User,
-) -> Dataset:
-    dataset = (
-        db.query(Dataset)
-        .filter(
-            Dataset.id == dataset_id,
-            Dataset.user_id == current_user.id,
-        )
-        .first()
-    )
-
-    if not dataset:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Dataset not found",
-        )
-
-    return dataset
+VALID_TASK_TYPES = {task_type.value for task_type in TaskType}
 
 
 def get_dataset_path_for_analysis(dataset: Dataset) -> str:
@@ -173,7 +150,7 @@ def validate_analysis_request(
 ) -> Dataset:
     validate_task_type(task_type)
 
-    dataset = get_user_dataset(
+    dataset = get_owned_dataset(
         db=db,
         dataset_id=dataset_id,
         current_user=current_user,
@@ -224,7 +201,7 @@ def create_analysis_job(
         dataset_id=dataset.id,
         task_type=task_type,
         target_column=target_column,
-        status="created",
+        status=JobStatus.CREATED,
         config_json=config_json,
     )
 

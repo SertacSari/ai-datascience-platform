@@ -7,9 +7,9 @@ from fastapi import HTTPException
 from app.models.analysis_job import AnalysisJob
 from app.models.dataset import Dataset
 from app.models.user import User
+from app.services.dataset_service import get_owned_dataset
 from app.services.analysis_service import (
     get_analysis_job,
-    get_user_dataset,
     list_analysis_jobs,
     validate_forecasting_target,
     validate_target_column,
@@ -87,7 +87,7 @@ def test_non_owned_analysis_dataset_and_job_return_404(db_session) -> None:
     db_session.commit()
 
     with pytest.raises(HTTPException) as dataset_error:
-        get_user_dataset(db_session, dataset.id, other_user)
+        get_owned_dataset(db_session, dataset.id, other_user)
     with pytest.raises(HTTPException) as job_error:
         get_analysis_job(db_session, job.id, other_user)
 

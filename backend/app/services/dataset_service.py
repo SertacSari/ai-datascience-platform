@@ -1,6 +1,5 @@
 import csv
 import json
-import os
 import zipfile
 from itertools import chain
 from pathlib import Path
@@ -10,15 +9,17 @@ import pandas as pd
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
+from app.config import MAX_DATAFRAME_MEMORY_MB, MAX_UPLOAD_SIZE_MB, UPLOAD_DIR
 from app.models.dataset import Dataset
 from app.models.user import User
-
-
-UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads"
-MAX_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_UPLOAD_SIZE_MB", "50")) * 1024 * 1024
-MAX_DATAFRAME_MEMORY_BYTES = (
-    int(os.getenv("MAX_DATAFRAME_MEMORY_MB", "200")) * 1024 * 1024
+from app.schemas.dataset import (
+    CleanDatasetResponse,
+    CleaningReportResponse,
+    DatasetPreviewResponse,
 )
+
+MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+MAX_DATAFRAME_MEMORY_BYTES = MAX_DATAFRAME_MEMORY_MB * 1024 * 1024
 UPLOAD_CHUNK_SIZE_BYTES = 1024 * 1024
 CSV_CHUNK_SIZE_ROWS = 10_000
 CSV_CONCATENATION_MEMORY_FACTOR = 2
@@ -283,7 +284,7 @@ def get_dataset_preview(
     db: Session,
     dataset_id: int,
     current_user: User,
-) -> dict:
+) -> DatasetPreviewResponse:
     dataset = get_owned_dataset(db, dataset_id, current_user)
 
     if not Path(dataset.file_path).is_file():
@@ -319,17 +320,17 @@ def get_dataset_preview(
         df.describe(include="all").to_json(date_format="iso")
     )
 
-    return {
-        "dataset_id": dataset.id,
-        "file_name": dataset.file_name,
-        "row_count": int(df.shape[0]),
-        "column_count": int(df.shape[1]),
-        "columns": [str(column) for column in df.columns],
-        "preview": preview,
-        "column_info": column_info,
-        "duplicate_rows": duplicate_rows,
-        "summary_statistics": summary_statistics,
-    }
+    return DatasetPreviewResponse(
+        dataset_id=dataset.id,
+        file_name=dataset.file_name,
+        row_count=int(df.shape[0]),
+        column_count=int(df.shape[1]),
+        columns=[str(column) for column in df.columns],
+        preview=preview,
+        column_info=column_info,
+        duplicate_rows=duplicate_rows,
+        summary_statistics=summary_statistics,
+    )
 
 
 def detect_column_types(df: pd.DataFrame) -> dict[str, str]:
@@ -430,7 +431,7 @@ def get_cleaning_report(
     db: Session,
     dataset_id: int,
     current_user: User,
-) -> dict:
+) -> CleaningReportResponse:
     dataset = get_owned_dataset(db, dataset_id, current_user)
 
     if not Path(dataset.file_path).is_file():
@@ -453,18 +454,18 @@ def get_cleaning_report(
         duplicate_rows=duplicate_rows,
     )
 
-    return {
-        "dataset_id": dataset.id,
-        "file_name": dataset.file_name,
-        "row_count": int(df.shape[0]),
-        "column_count": int(df.shape[1]),
-        "column_types": column_types,
-        "missing_values": missing_values,
-        "infinite_values": infinite_values,
-        "duplicate_rows": duplicate_rows,
-        "issues": issues,
-        "ready_for_ml": len(issues) == 0,
-    }
+    return CleaningReportResponse(
+        dataset_id=dataset.id,
+        file_name=dataset.file_name,
+        row_count=int(df.shape[0]),
+        column_count=int(df.shape[1]),
+        column_types=column_types,
+        missing_values=missing_values,
+        infinite_values=infinite_values,
+        duplicate_rows=duplicate_rows,
+        issues=issues,
+        ready_for_ml=len(issues) == 0,
+    )
 
 
 def clean_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
@@ -516,7 +517,7 @@ def clean_dataset(
     db: Session,
     dataset_id: int,
     current_user: User,
-) -> dict:
+) -> CleanDatasetResponse:
     dataset = get_owned_dataset(db, dataset_id, current_user)
 
     if not Path(dataset.file_path).is_file():
@@ -544,10 +545,10 @@ def clean_dataset(
         Path(cleaned_file_path).unlink(missing_ok=True)
         raise
 
-    return {
-        "dataset_id": dataset.id,
-        "original_row_count": original_row_count,
-        "cleaned_row_count": int(cleaned_df.shape[0]),
-        "removed_duplicate_rows": removed_duplicate_rows,
-        "message": "Dataset cleaned successfully",
-    }
+    return CleanDatasetResponse(
+        dataset_id=dataset.id,
+        original_row_count=original_row_count,
+        cleaned_row_count=int(cleaned_df.shape[0]),
+        removed_duplicate_rows=removed_duplicate_rows,
+        message="Dataset cleaned successfully",
+    )

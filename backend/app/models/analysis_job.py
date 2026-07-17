@@ -4,6 +4,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
+    Enum,
     ForeignKey,
     Index,
     Integer,
@@ -14,6 +15,11 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from app.database import Base
+from app.models.enums import JobStatus, TaskType
+
+
+def enum_values(enum_class):
+    return [member.value for member in enum_class]
 
 
 class AnalysisJob(Base):
@@ -34,9 +40,28 @@ class AnalysisJob(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     dataset_id = Column(Integer, ForeignKey("datasets.id"), nullable=False)
 
-    task_type = Column(String(30), nullable=False)
+    task_type = Column(
+        Enum(
+            TaskType,
+            values_callable=enum_values,
+            native_enum=False,
+            create_constraint=False,
+            length=30,
+        ),
+        nullable=False,
+    )
     target_column = Column(String(255), nullable=False)
-    status = Column(String(30), default="created", nullable=False)
+    status = Column(
+        Enum(
+            JobStatus,
+            values_callable=enum_values,
+            native_enum=False,
+            create_constraint=False,
+            length=30,
+        ),
+        default=JobStatus.CREATED,
+        nullable=False,
+    )
     config_json = Column(
         JSON,
         default=dict,

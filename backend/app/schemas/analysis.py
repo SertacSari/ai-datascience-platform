@@ -1,11 +1,9 @@
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
-TaskType = Literal["classification", "regression", "forecasting"]
-AnalysisStatus = Literal["created", "running", "completed", "failed"]
+from app.models.enums import JobStatus, TaskType
 
 
 class AnalysisJobCreate(BaseModel):
@@ -23,7 +21,7 @@ class AnalysisJobResponse(BaseModel):
     dataset_id: int
     task_type: TaskType
     target_column: str
-    status: AnalysisStatus
+    status: JobStatus
     config_json: dict[str, Any]
     created_at: datetime
     finished_at: datetime | None

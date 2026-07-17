@@ -1,13 +1,12 @@
-import os
 from datetime import datetime, timedelta
 
-from dotenv import load_dotenv
 from fastapi import HTTPException, status
 from jose import jwt
 from passlib.context import CryptContext
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.config import ACCESS_TOKEN_EXPIRE_MINUTES, ALGORITHM, SECRET_KEY
 from app.models.user import User
 from app.schemas.user import MAX_BCRYPT_PASSWORD_BYTES, UserCreate
 
@@ -51,16 +50,6 @@ def register_user(db: Session, user_data: UserCreate) -> User:
         ) from exc
 
     return new_user
-
-
-load_dotenv()
-
-SECRET_KEY = os.getenv("SECRET_KEY")
-ALGORITHM = os.getenv("ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
-
-if not SECRET_KEY:
-    raise RuntimeError("SECRET_KEY environment variable is required")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
