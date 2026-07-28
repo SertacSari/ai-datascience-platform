@@ -1,7 +1,12 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
+from app.config import (
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    AUTH_COOKIE_NAME,
+    AUTH_COOKIE_SECURE,
+)
 from app.dependencies import get_current_user
 from app.database import get_db
 from app.models.user import User
@@ -27,6 +32,7 @@ def register(user_data: UserCreate, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=TokenResponse)
 def login(
+    response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
@@ -37,11 +43,32 @@ def login(
     )
 
     access_token = create_access_token(data={"sub": str(user.id)})
+    response.set_cookie(
+        key=AUTH_COOKIE_NAME,
+        value=access_token,
+        httponly=True,
+        samesite="lax",
+        secure=AUTH_COOKIE_SECURE,
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        path="/",
+    )
 
     return {
         "access_token": access_token,
         "token_type": "bearer",
     }
+
+
+@router.post("/logout")
+def logout(response: Response):
+    response.delete_cookie(
+        key=AUTH_COOKIE_NAME,
+        httponly=True,
+        samesite="lax",
+        secure=AUTH_COOKIE_SECURE,
+        path="/",
+    )
+    return {"message": "Logged out"}
 
 
 @router.get("/me", response_model=UserResponse)

@@ -30,6 +30,23 @@ def get_int_setting(name: str, default: int) -> int:
     return value
 
 
+def get_bool_setting(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+
+    if raw_value is None:
+        return default
+
+    normalized_value = raw_value.strip().lower()
+
+    if normalized_value in {"1", "true", "yes", "on"}:
+        return True
+
+    if normalized_value in {"0", "false", "no", "off"}:
+        return False
+
+    raise RuntimeError(f"{name} must be a boolean")
+
+
 def get_upload_dir() -> Path:
     upload_dir = Path(os.getenv("UPLOAD_DIR", "uploads"))
 
@@ -43,6 +60,8 @@ DATABASE_URL = get_required_setting("DATABASE_URL")
 SECRET_KEY = get_required_setting("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = get_int_setting("ACCESS_TOKEN_EXPIRE_MINUTES", 30)
+AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "basitanaliz_access_token")
+AUTH_COOKIE_SECURE = get_bool_setting("AUTH_COOKIE_SECURE", False)
 UPLOAD_DIR = get_upload_dir()
 MAX_UPLOAD_SIZE_MB = get_int_setting("MAX_UPLOAD_SIZE_MB", 50)
 MAX_DATAFRAME_MEMORY_MB = get_int_setting("MAX_DATAFRAME_MEMORY_MB", 200)

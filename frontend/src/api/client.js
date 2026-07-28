@@ -1,4 +1,10 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+const LEGACY_TOKEN_KEY = "datavista_access_token";
+
+export function clearLegacyStoredToken() {
+  localStorage.removeItem(LEGACY_TOKEN_KEY);
+  sessionStorage.removeItem(LEGACY_TOKEN_KEY);
+}
 
 async function parseResponse(response) {
   const contentType = response.headers.get("content-type") || "";
@@ -8,6 +14,7 @@ async function parseResponse(response) {
 
   if (!response.ok) {
     if (response.status === 401 && typeof window !== "undefined") {
+      clearLegacyStoredToken();
       window.dispatchEvent(new CustomEvent("datavista:unauthorized"));
     }
 
@@ -21,10 +28,6 @@ async function parseResponse(response) {
   return body;
 }
 
-function authHeaders(token) {
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
 export async function login(email, password) {
   const form = new URLSearchParams();
   form.set("username", email);
@@ -34,6 +37,7 @@ export async function login(email, password) {
     await fetch(`${API_BASE_URL}/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      credentials: "include",
       body: form
     })
   );
@@ -44,71 +48,82 @@ export async function register({ email, password, username }) {
     await fetch(`${API_BASE_URL}/auth/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      credentials: "include",
       body: JSON.stringify({ email, password, username })
     })
   );
 }
 
-export async function getMe(token) {
+export async function logout() {
   return parseResponse(
-    await fetch(`${API_BASE_URL}/auth/me`, {
-      headers: authHeaders(token)
+    await fetch(`${API_BASE_URL}/auth/logout`, {
+      method: "POST",
+      credentials: "include"
     })
   );
 }
 
-export async function uploadDataset(file, token) {
+export async function getMe() {
+  return parseResponse(
+    await fetch(`${API_BASE_URL}/auth/me`, {
+      credentials: "include"
+    })
+  );
+}
+
+export async function uploadDataset(file) {
   const form = new FormData();
   form.append("file", file);
 
   return parseResponse(
     await fetch(`${API_BASE_URL}/datasets/upload`, {
       method: "POST",
-      headers: authHeaders(token),
+      credentials: "include",
       body: form
     })
   );
 }
 
-export async function getDatasetPreview(datasetId, token) {
+export async function getDatasetPreview(datasetId) {
   return parseResponse(
     await fetch(`${API_BASE_URL}/datasets/${datasetId}/preview`, {
-      headers: authHeaders(token)
+      credentials: "include"
     })
   );
 }
 
-export async function getCleaningReport(datasetId, token) {
+export async function getCleaningReport(datasetId) {
   return parseResponse(
     await fetch(`${API_BASE_URL}/datasets/${datasetId}/cleaning-report`, {
-      headers: authHeaders(token)
+      credentials: "include"
     })
   );
 }
 
-export async function cleanDataset(datasetId, token) {
+export async function cleanDataset(datasetId) {
   return parseResponse(
     await fetch(`${API_BASE_URL}/datasets/${datasetId}/clean`, {
       method: "POST",
-      headers: authHeaders(token)
+      credentials: "include"
     })
   );
 }
 
-export async function createAnalysisJob(payload, token) {
+export async function createAnalysisJob(payload) {
   return parseResponse(
     await fetch(`${API_BASE_URL}/analysis/jobs`, {
       method: "POST",
-      headers: { ...authHeaders(token), "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
       body: JSON.stringify(payload)
     })
   );
 }
 
-export async function listAnalysisJobs(token) {
+export async function listAnalysisJobs() {
   return parseResponse(
     await fetch(`${API_BASE_URL}/analysis/jobs?limit=20&offset=0`, {
-      headers: authHeaders(token)
+      credentials: "include"
     })
   );
 }
