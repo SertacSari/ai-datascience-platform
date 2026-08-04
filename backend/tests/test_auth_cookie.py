@@ -1,3 +1,4 @@
+from http.cookies import SimpleCookie
 from types import SimpleNamespace
 
 from fastapi import HTTPException, Response
@@ -25,11 +26,17 @@ def get_set_cookie_header(response: Response) -> str:
     return response.headers["set-cookie"]
 
 
+def get_auth_cookie_value(response: Response) -> str:
+    cookie = SimpleCookie()
+    cookie.load(get_set_cookie_header(response))
+    return cookie[AUTH_COOKIE_NAME].value
+
+
 def test_login_sets_httponly_cookie_and_me_reads_cookie(db_session) -> None:
     add_user(db_session)
 
     response = Response()
-    token_response = login(
+    login_response = login(
         response=response,
         form_data=SimpleNamespace(
             username="cookie@example.com",
@@ -39,7 +46,7 @@ def test_login_sets_httponly_cookie_and_me_reads_cookie(db_session) -> None:
     )
 
     set_cookie = get_set_cookie_header(response)
-    assert token_response["token_type"] == "bearer"
+    assert login_response == {"message": "Logged in"}
     assert AUTH_COOKIE_NAME in set_cookie
     assert "HttpOnly" in set_cookie
     assert "SameSite=lax" in set_cookie
@@ -47,7 +54,7 @@ def test_login_sets_httponly_cookie_and_me_reads_cookie(db_session) -> None:
     assert f"Max-Age={ACCESS_TOKEN_EXPIRE_MINUTES * 60}" in set_cookie
 
     current_user = get_current_user(
-        request=SimpleNamespace(cookies={AUTH_COOKIE_NAME: token_response["access_token"]}),
+        request=SimpleNamespace(cookies={AUTH_COOKIE_NAME: get_auth_cookie_value(response)}),
         bearer_token=None,
         db=db_session,
     )

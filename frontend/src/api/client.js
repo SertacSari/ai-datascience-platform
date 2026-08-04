@@ -1,4 +1,8 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+const defaultApiBaseUrl =
+  typeof window === "undefined"
+    ? "http://127.0.0.1:8000"
+    : `http://${window.location.hostname}:8000`;
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || defaultApiBaseUrl;
 const LEGACY_TOKEN_KEY = "datavista_access_token";
 
 export function clearLegacyStoredToken() {
@@ -22,7 +26,9 @@ async function parseResponse(response) {
       typeof body === "object" && body !== null && "detail" in body
         ? body.detail
         : body || "Request failed";
-    throw new Error(Array.isArray(detail) ? detail.map((item) => item.msg).join(", ") : detail);
+    const error = new Error(Array.isArray(detail) ? detail.map((item) => item.msg).join(", ") : detail);
+    error.status = response.status;
+    throw error;
   }
 
   return body;
@@ -116,6 +122,23 @@ export async function createAnalysisJob(payload) {
       headers: { "Content-Type": "application/json" },
       credentials: "include",
       body: JSON.stringify(payload)
+    })
+  );
+}
+
+export async function runAnalysisJob(jobId) {
+  return parseResponse(
+    await fetch(`${API_BASE_URL}/analysis/jobs/${jobId}/run`, {
+      method: "POST",
+      credentials: "include"
+    })
+  );
+}
+
+export async function getAnalysisJobResult(jobId) {
+  return parseResponse(
+    await fetch(`${API_BASE_URL}/analysis/jobs/${jobId}/result`, {
+      credentials: "include"
     })
   );
 }

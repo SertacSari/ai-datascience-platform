@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -8,6 +8,9 @@ from app.database import Base
 
 class ModelResult(Base):
     __tablename__ = "model_results"
+    __table_args__ = (
+        UniqueConstraint("analysis_id", name="uq_model_results_analysis_id"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     analysis_id = Column(Integer, ForeignKey("analysis_jobs.id"), nullable=False)

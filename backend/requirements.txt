@@ -12,3 +12,4 @@ email-validator
 openpyxl
 xlrd
 pydantic
+scikit-learn

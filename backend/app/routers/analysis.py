@@ -7,12 +7,19 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.analysis_job import AnalysisJob
 from app.models.user import User
-from app.schemas.analysis import AnalysisJobCreate, AnalysisJobResponse
+from app.schemas.analysis import (
+    AnalysisJobCreate,
+    AnalysisJobResponse,
+    AnalysisJobRunResponse,
+    ModelResultResponse,
+)
 from app.services.analysis_service import (
     create_analysis_job,
     get_analysis_job,
+    get_analysis_job_result,
     list_analysis_jobs,
 )
+from app.services.classification_training_service import run_analysis_job
 
 
 router = APIRouter(
@@ -68,6 +75,43 @@ def get_analysis_job_endpoint(
     current_user: User = Depends(get_current_user),
 ) -> AnalysisJob:
     return get_analysis_job(
+        db=db,
+        job_id=job_id,
+        current_user=current_user,
+    )
+
+
+@router.post(
+    "/jobs/{job_id}/run",
+    response_model=AnalysisJobRunResponse,
+)
+def run_analysis_job_endpoint(
+    job_id: Annotated[int, Path(gt=0)],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> AnalysisJobRunResponse:
+    analysis_job, model_result = run_analysis_job(
+        db=db,
+        job_id=job_id,
+        current_user=current_user,
+    )
+
+    return AnalysisJobRunResponse(
+        job=analysis_job,
+        model_result=model_result,
+    )
+
+
+@router.get(
+    "/jobs/{job_id}/result",
+    response_model=ModelResultResponse,
+)
+def get_analysis_job_result_endpoint(
+    job_id: Annotated[int, Path(gt=0)],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return get_analysis_job_result(
         db=db,
         job_id=job_id,
         current_user=current_user,

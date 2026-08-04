@@ -84,6 +84,8 @@ def test_openapi_declares_pagination_and_positive_job_id_bounds() -> None:
     assert list_parameters["limit"]["maximum"] == 100
     assert list_parameters["offset"]["minimum"] == 0
     assert job_parameters["job_id"]["exclusiveMinimum"] == 0
+    assert "/analysis/jobs/{job_id}/run" in schema["paths"]
+    assert "/analysis/jobs/{job_id}/result" in schema["paths"]
 
 
 def test_analysis_job_python_and_server_config_defaults(db_session) -> None:

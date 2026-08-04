@@ -10,7 +10,7 @@ from app.config import (
 from app.dependencies import get_current_user
 from app.database import get_db
 from app.models.user import User
-from app.schemas.auth import TokenResponse
+from app.schemas.auth import AuthMessageResponse
 from app.schemas.user import UserCreate, UserResponse
 from app.services.auth_service import authenticate_user, create_access_token, register_user
 
@@ -30,7 +30,7 @@ def register(user_data: UserCreate, db: Session = Depends(get_db)):
     return register_user(db=db, user_data=user_data)
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=AuthMessageResponse)
 def login(
     response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
@@ -38,6 +38,7 @@ def login(
 ):
     user = authenticate_user(
         db=db,
+        # OAuth2PasswordRequestForm names the login field "username"; this app uses email.
         email=form_data.username,
         password=form_data.password,
     )
@@ -54,8 +55,7 @@ def login(
     )
 
     return {
-        "access_token": access_token,
-        "token_type": "bearer",
+        "message": "Logged in",
     }
 
 

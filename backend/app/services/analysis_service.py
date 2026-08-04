@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.models.analysis_job import AnalysisJob
 from app.models.dataset import Dataset
 from app.models.enums import JobStatus, TaskType
+from app.models.model_result import ModelResult
 from app.models.user import User
 from app.services.dataset_service import get_owned_dataset, read_stored_dataset_file
 
@@ -129,9 +130,16 @@ def validate_task_specific_rules(
     task_type: TaskType,
     target_column: str,
     config_json: dict[str, Any],
+    dataset: Dataset,
 ) -> None:
     if task_type == "classification":
-        validate_classification_target(df, target_column)
+        from app.services.classification_training_service import (
+            validate_original_target_was_not_fabricated,
+            validate_classification_ml_readiness,
+        )
+
+        validate_original_target_was_not_fabricated(dataset, target_column)
+        validate_classification_ml_readiness(df, target_column)
 
     elif task_type == "regression":
         validate_regression_target(df, target_column)
@@ -174,6 +182,7 @@ def validate_analysis_request(
         task_type=task_type,
         target_column=target_column,
         config_json=config_json,
+        dataset=dataset,
     )
 
     return dataset
@@ -253,3 +262,35 @@ def get_analysis_job(
         )
 
     return job
+
+
+def get_analysis_job_result(
+    db: Session,
+    job_id: int,
+    current_user: User,
+) -> ModelResult:
+    job = get_analysis_job(
+        db=db,
+        job_id=job_id,
+        current_user=current_user,
+    )
+
+    if job.status != JobStatus.COMPLETED:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Model result not found for this analysis job",
+        )
+
+    model_result = (
+        db.query(ModelResult)
+        .filter(ModelResult.analysis_id == job.id)
+        .first()
+    )
+
+    if model_result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Model result not found for this analysis job",
+        )
+
+    return model_result

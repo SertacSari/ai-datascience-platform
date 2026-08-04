@@ -4,7 +4,9 @@ import {
   createAnalysisJob,
   getCleaningReport,
   getDatasetPreview,
+  getAnalysisJobResult,
   listAnalysisJobs,
+  runAnalysisJob,
   uploadDataset
 } from "../api/client";
 import AiSummaryCard from "../components/AiSummaryCard";
@@ -97,6 +99,164 @@ function DatasetPreviewCard({ dataset, preview }) {
   );
 }
 
+function formatMetric(value) {
+  if (typeof value !== "number") return value ?? "Not available";
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function isReportMetricRow(value) {
+  return (
+    value &&
+    typeof value === "object" &&
+    ("precision" in value || "recall" in value || "f1-score" in value || "support" in value)
+  );
+}
+
+function matrixLabels(matrix, classDistribution, reportRows) {
+  const distributionLabels = Object.keys(classDistribution || {});
+  if (distributionLabels.length === matrix.length) return distributionLabels;
+
+  const reportLabels = reportRows
+    .map(([label]) => label)
+    .filter((label) => !/accuracy|avg/i.test(label));
+  if (reportLabels.length === matrix.length) return reportLabels;
+
+  return matrix.map((_, index) => `Class ${index + 1}`);
+}
+
+function trainingErrorMessage(error) {
+  const message = error?.message || "";
+
+  if (error?.status === 409 || /Only created jobs can be run/i.test(message)) {
+    return "This job has already been completed. This job cannot be run again from this phase. Refresh jobs and choose a created classification job.";
+  }
+
+  if (error?.status === 401) {
+    return "Your session expired. Please log in again.";
+  }
+
+  return message || "Training failed. Check that the dataset and target column are suitable for classification.";
+}
+
+function ClassificationResultCard({ result }) {
+  const modelResult = result?.model_result || result;
+  if (!modelResult) return null;
+
+  const { metrics = {}, report_json: reportJson = {} } = modelResult;
+  const classDistribution = metrics.class_distribution || {};
+  const confusionMatrix = Array.isArray(reportJson.confusion_matrix) ? reportJson.confusion_matrix : [];
+  const classificationReport = reportJson.classification_report || {};
+  const reportRows = Object.entries(classificationReport).filter(([, value]) => isReportMetricRow(value));
+  const labels = matrixLabels(confusionMatrix, classDistribution, reportRows);
+  const metricRows = [
+    ["Accuracy", metrics.accuracy],
+    ["Precision", metrics.precision],
+    ["Recall", metrics.recall],
+    ["F1 score", metrics.f1_score]
+  ];
+
+  return (
+    <section className="card classification-result-card">
+      <div className="card-head">
+        <div>
+          <p className="eyebrow">Classification result</p>
+          <h2>{result?.job?.id ? `Job #${result.job.id} completed` : "Completed job result"}</h2>
+        </div>
+        <Badge tone="ok">{modelResult.model_name || "Saved model"}</Badge>
+      </div>
+
+      <table className="result-table">
+        <tbody>
+          {metricRows.map(([label, value]) => (
+            <tr key={label}>
+              <th scope="row">{label}</th>
+              <td>{formatMetric(value)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <div className="result-block">
+        <strong>Class distribution</strong>
+        {Object.keys(classDistribution).length ? (
+          <table className="result-table">
+            <tbody>
+              {Object.entries(classDistribution).map(([label, count]) => (
+                <tr key={label}>
+                  <th scope="row">{label}</th>
+                  <td>{count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p className="muted">No class distribution was returned.</p>
+        )}
+      </div>
+      <div className="result-block">
+        <strong>Confusion matrix</strong>
+        {confusionMatrix.length ? (
+          <div className="table-wrap">
+            <table className="result-table matrix-table">
+              <thead>
+                <tr>
+                  <th scope="col">Actual \ Predicted</th>
+                  {labels.map((label) => (
+                    <th key={label} scope="col">{label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {confusionMatrix.map((row, rowIndex) => (
+                  <tr key={labels[rowIndex] || rowIndex}>
+                    <th scope="row">{labels[rowIndex] || `Class ${rowIndex + 1}`}</th>
+                    {row.map((value, columnIndex) => (
+                      <td key={`${rowIndex}-${columnIndex}`}>{value}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="muted">No confusion matrix was returned.</p>
+        )}
+      </div>
+      <div className="result-block">
+        <strong>Classification report</strong>
+        {reportRows.length ? (
+          <div className="table-wrap">
+            <table className="result-table report-table">
+              <thead>
+                <tr>
+                  <th scope="col">Class</th>
+                  <th scope="col">Precision</th>
+                  <th scope="col">Recall</th>
+                  <th scope="col">F1</th>
+                  <th scope="col">Support</th>
+                </tr>
+              </thead>
+              <tbody>
+                {reportRows.map(([label, values]) => (
+                  <tr key={label}>
+                    <th scope="row">{label}</th>
+                    <td>{formatMetric(values.precision)}</td>
+                    <td>{formatMetric(values.recall)}</td>
+                    <td>{formatMetric(values["f1-score"])}</td>
+                    <td>{values.support ?? "Not available"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <pre>{JSON.stringify(classificationReport, null, 2)}</pre>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export default function DashboardPage() {
   const {
     dashboardData,
@@ -109,6 +269,8 @@ export default function DashboardPage() {
   const [jobForm, setJobForm] = useState({ task_type: "regression", target_column: "", date_column: "" });
   const [cleanStatus, setCleanStatus] = useState({ type: "idle", message: "" });
   const [jobStatus, setJobStatus] = useState({ type: "idle", message: "" });
+  const [runStatus, setRunStatus] = useState({ jobId: null, type: "idle", message: "" });
+  const [classificationResult, setClassificationResult] = useState(null);
   const { cleanResult, cleaning, dataset, preview } = dashboardData;
   const stats = dashboardStats(dataset, cleaning, jobs);
   const technical = technicalFromBackend(cleaning, preview);
@@ -205,6 +367,49 @@ export default function DashboardPage() {
       });
     } catch (error) {
       setJobStatus({ type: "error", message: error.message || "Could not create analysis job" });
+    }
+  }
+
+  async function handleRunJob(job) {
+    setRunStatus({ jobId: job.id, type: "loading", message: `Running classification job #${job.id}...` });
+    setClassificationResult(null);
+    try {
+      const result = await runAnalysisJob(job.id);
+      const nextJobs = await listAnalysisJobs();
+      setJobs(nextJobs);
+      setClassificationResult(result);
+      setRunStatus({
+        jobId: job.id,
+        type: "success",
+        message: `Classification job #${job.id} completed.`
+      });
+    } catch (error) {
+      const nextJobs = await listAnalysisJobs().catch(() => jobs);
+      setJobs(nextJobs);
+      setRunStatus({
+        jobId: job.id,
+        type: "error",
+        message: trainingErrorMessage(error)
+      });
+    }
+  }
+
+  async function handleViewResult(job) {
+    setRunStatus({ jobId: job.id, type: "loading", message: `Loading saved result for job #${job.id}...` });
+    try {
+      const modelResult = await getAnalysisJobResult(job.id);
+      setClassificationResult({ job, model_result: modelResult });
+      setRunStatus({
+        jobId: job.id,
+        type: "success",
+        message: `Loaded saved classification result for job #${job.id}.`
+      });
+    } catch (error) {
+      setRunStatus({
+        jobId: job.id,
+        type: "error",
+        message: error.message || "Could not load the saved result for this job."
+      });
     }
   }
 
@@ -342,11 +547,15 @@ export default function DashboardPage() {
           </form>
           <p className="muted">
             {dataset
-              ? "This creates the job only; model training comes in the next phase."
+              ? "Create the job first; classification jobs can be run here."
               : "Upload a dataset to enable backend analysis requests."}
+          </p>
+          <p className="muted">
+            Classification training is available. Regression and forecasting training come later.
           </p>
           {numericColumns.length ? <p className="muted">Numeric columns: {numericColumns.slice(0, 4).join(", ")}</p> : null}
           {jobStatus.message ? <div aria-live="polite" className={`backend-status ${jobStatus.type}`} role="status">{jobStatus.message}</div> : null}
+          {runStatus.message ? <div aria-live="polite" className={`backend-status ${runStatus.type}`} role="status">{runStatus.message}</div> : null}
           {jobs.length ? (
             <div className="job-list">
               {jobs.slice(0, 4).map((job) => (
@@ -354,12 +563,33 @@ export default function DashboardPage() {
                   <strong>#{job.id} {job.task_type}</strong>
                   <span>{job.target_column}</span>
                   <Badge tone={job.status === "failed" ? "err" : job.status === "completed" ? "ok" : "warn"}>{job.status}</Badge>
+                  {job.task_type === "classification" && job.status === "created" ? (
+                    <button
+                      className="button sm"
+                      disabled={runStatus.type === "loading"}
+                      onClick={() => handleRunJob(job)}
+                      type="button"
+                    >
+                      {runStatus.type === "loading" && runStatus.jobId === job.id ? "Running..." : "Run job"}
+                    </button>
+                  ) : null}
+                  {job.task_type === "classification" && job.status === "completed" ? (
+                    <button
+                      className="button sm"
+                      disabled={runStatus.type === "loading"}
+                      onClick={() => handleViewResult(job)}
+                      type="button"
+                    >
+                      {runStatus.type === "loading" && runStatus.jobId === job.id ? "Loading..." : "View result"}
+                    </button>
+                  ) : null}
                 </div>
               ))}
             </div>
           ) : null}
         </section>
 
+        <ClassificationResultCard result={classificationResult} />
         <DatasetPreviewCard dataset={dataset} preview={preview} />
       </section>
     </main>

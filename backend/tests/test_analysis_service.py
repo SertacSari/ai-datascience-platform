@@ -6,10 +6,13 @@ from fastapi import HTTPException
 
 from app.models.analysis_job import AnalysisJob
 from app.models.dataset import Dataset
+from app.models.enums import JobStatus
+from app.models.model_result import ModelResult
 from app.models.user import User
 from app.services.dataset_service import get_owned_dataset
 from app.services.analysis_service import (
     get_analysis_job,
+    get_analysis_job_result,
     list_analysis_jobs,
     validate_forecasting_target,
     validate_target_column,
@@ -117,3 +120,123 @@ def test_job_pagination_has_stable_created_at_and_id_order(db_session) -> None:
 
     assert [job.id for job in first_page] == [jobs[2].id, jobs[1].id]
     assert [job.id for job in second_page] == [jobs[0].id]
+
+
+def test_owner_can_fetch_model_result_after_job_completed(db_session) -> None:
+    user = add_user(db_session, "result_owner")
+    dataset = add_dataset(db_session, user)
+    job = AnalysisJob(
+        user_id=user.id,
+        dataset_id=dataset.id,
+        task_type="classification",
+        target_column="target",
+        status=JobStatus.COMPLETED,
+    )
+    db_session.add(job)
+    db_session.flush()
+    model_result = ModelResult(
+        analysis_id=job.id,
+        model_name="RandomForestClassifier",
+        metrics={"accuracy": 0.9},
+        report_json={"class_distribution": {"yes": 10, "no": 10}},
+    )
+    db_session.add(model_result)
+    db_session.commit()
+
+    result = get_analysis_job_result(db_session, job.id, user)
+
+    assert result.id == model_result.id
+    assert result.metrics == {"accuracy": 0.9}
+
+
+def test_non_owner_cannot_fetch_model_result(db_session) -> None:
+    owner = add_user(db_session, "result_owner")
+    other_user = add_user(db_session, "result_other")
+    dataset = add_dataset(db_session, owner)
+    job = AnalysisJob(
+        user_id=owner.id,
+        dataset_id=dataset.id,
+        task_type="classification",
+        target_column="target",
+        status=JobStatus.COMPLETED,
+    )
+    db_session.add(job)
+    db_session.flush()
+    db_session.add(
+        ModelResult(
+            analysis_id=job.id,
+            model_name="RandomForestClassifier",
+            metrics={"accuracy": 0.9},
+            report_json={},
+        )
+    )
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as error:
+        get_analysis_job_result(db_session, job.id, other_user)
+
+    assert error.value.status_code == 404
+    assert error.value.detail == "Analysis job not found"
+
+
+@pytest.mark.parametrize(
+    "job_status",
+    [JobStatus.COMPLETED, JobStatus.CREATED],
+)
+def test_job_without_model_result_returns_404(
+    db_session,
+    job_status: JobStatus,
+) -> None:
+    user = add_user(db_session, f"no_result_{job_status.value}")
+    dataset = add_dataset(db_session, user)
+    job = AnalysisJob(
+        user_id=user.id,
+        dataset_id=dataset.id,
+        task_type="classification",
+        target_column="target",
+        status=job_status,
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as error:
+        get_analysis_job_result(db_session, job.id, user)
+
+    assert error.value.status_code == 404
+    assert error.value.detail == "Model result not found for this analysis job"
+
+
+@pytest.mark.parametrize(
+    "job_status",
+    [JobStatus.CREATED, JobStatus.RUNNING, JobStatus.FAILED],
+)
+def test_non_completed_job_result_returns_404_even_if_result_exists(
+    db_session,
+    job_status: JobStatus,
+) -> None:
+    user = add_user(db_session, f"unfinished_result_{job_status.value}")
+    dataset = add_dataset(db_session, user)
+    job = AnalysisJob(
+        user_id=user.id,
+        dataset_id=dataset.id,
+        task_type="classification",
+        target_column="target",
+        status=job_status,
+    )
+    db_session.add(job)
+    db_session.flush()
+    db_session.add(
+        ModelResult(
+            analysis_id=job.id,
+            model_name="RandomForestClassifier",
+            metrics={"accuracy": 0.9},
+            report_json={},
+        )
+    )
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as error:
+        get_analysis_job_result(db_session, job.id, user)
+
+    assert error.value.status_code == 404
+    assert error.value.detail == "Model result not found for this analysis job"

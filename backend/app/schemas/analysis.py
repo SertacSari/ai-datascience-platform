@@ -25,3 +25,19 @@ class AnalysisJobResponse(BaseModel):
     config_json: dict[str, Any]
     created_at: datetime
     finished_at: datetime | None
+
+
+class ModelResultResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    analysis_id: int
+    model_name: str
+    metrics: dict[str, Any] | None
+    report_json: dict[str, Any] | None
+    created_at: datetime
+
+
+class AnalysisJobRunResponse(BaseModel):
+    job: AnalysisJobResponse
+    model_result: ModelResultResponse
