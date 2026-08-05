@@ -26,6 +26,18 @@ CONTINUOUS_NUMERIC_UNIQUE_RATIO = 0.2
 TEST_SIZE = 0.2
 RANDOM_STATE = 42
 MODEL_NAME = "RandomForestClassifier"
+LOW_METRIC_THRESHOLD = 0.70
+GOOD_METRIC_THRESHOLD = 0.85
+CLASS_IMBALANCE_THRESHOLD = 0.70
+SMALL_DATASET_ROWS = 100
+
+
+METRIC_EXPLANATIONS = {
+    "accuracy": "Overall share of correct predictions.",
+    "precision": "When the model predicts a class, how often it is correct.",
+    "recall": "How many real cases of a class the model catches.",
+    "f1_score": "Balance between precision and recall.",
+}
 
 
 def get_enum_value(value: str | JobStatus | TaskType) -> str:
@@ -349,6 +361,107 @@ def train_classification_model(
     }
 
 
+def get_numeric_metric(metrics: dict[str, Any], metric_name: str) -> float | None:
+    value = metrics.get(metric_name)
+
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    return None
+
+
+def build_classification_interpretation(
+    metrics: dict[str, Any],
+    class_distribution: dict[str, int],
+) -> dict[str, Any]:
+    warnings = []
+    accuracy = get_numeric_metric(metrics, "accuracy")
+    precision = get_numeric_metric(metrics, "precision")
+    recall = get_numeric_metric(metrics, "recall")
+    f1_score = get_numeric_metric(metrics, "f1_score")
+    metric_values = [accuracy, precision, recall, f1_score]
+
+    if any(value is None for value in metric_values):
+        warnings.append(
+            {
+                "code": "missing_metrics",
+                "message": "Some model metrics are missing, so performance should be reviewed carefully.",
+            }
+        )
+
+    if accuracy is not None and accuracy < LOW_METRIC_THRESHOLD:
+        warnings.append(
+            {
+                "code": "low_accuracy",
+                "message": "Overall correctness is low, so predictions may be unreliable.",
+            }
+        )
+
+    if f1_score is not None and f1_score < LOW_METRIC_THRESHOLD:
+        warnings.append(
+            {
+                "code": "weak_f1",
+                "message": "The balance between precision and recall is weak.",
+            }
+        )
+
+    if precision is not None and precision < LOW_METRIC_THRESHOLD:
+        warnings.append(
+            {
+                "code": "low_precision",
+                "message": "When the model predicts a class, it may be wrong too often because precision is low.",
+            }
+        )
+
+    if recall is not None and recall < LOW_METRIC_THRESHOLD:
+        warnings.append(
+            {
+                "code": "low_recall",
+                "message": "The model may miss some real cases because recall is low.",
+            }
+        )
+
+    row_count = sum(class_distribution.values())
+    largest_class_count = max(class_distribution.values(), default=0)
+    largest_class_ratio = largest_class_count / row_count if row_count else 0
+
+    if largest_class_ratio > CLASS_IMBALANCE_THRESHOLD:
+        warnings.append(
+            {
+                "code": "class_imbalance",
+                "message": "One class dominates the dataset, so the model may favor that class.",
+            }
+        )
+
+    if row_count and row_count < SMALL_DATASET_ROWS:
+        warnings.append(
+            {
+                "code": "small_dataset",
+                "message": "The dataset is small, so the result may change with more data.",
+            }
+        )
+
+    if any(value is None for value in metric_values):
+        quality_level = "weak"
+        summary = "The model result is missing some metrics, so performance should be reviewed carefully."
+    elif accuracy >= GOOD_METRIC_THRESHOLD and f1_score >= GOOD_METRIC_THRESHOLD:
+        quality_level = "good"
+        summary = "The model shows good classification performance on the test split."
+    elif accuracy >= LOW_METRIC_THRESHOLD and f1_score >= LOW_METRIC_THRESHOLD:
+        quality_level = "fair"
+        summary = "The model shows fair classification performance, but results should be reviewed."
+    else:
+        quality_level = "weak"
+        summary = "The model shows weak classification performance and should not be relied on without review."
+
+    return {
+        "summary": summary,
+        "quality_level": quality_level,
+        "warnings": warnings,
+        "metric_explanations": METRIC_EXPLANATIONS,
+    }
+
+
 def build_model_result_payload(
     df: pd.DataFrame,
     target_column: str,
@@ -365,7 +478,13 @@ def build_model_result_payload(
         "test_size": TEST_SIZE,
         "model_name": MODEL_NAME,
     }
-    report_json = training_output["report_json"]
+    report_json = {
+        **training_output["report_json"],
+        "interpretation": build_classification_interpretation(
+            metrics=metrics,
+            class_distribution=class_distribution,
+        ),
+    }
 
     return MODEL_NAME, metrics, report_json
 

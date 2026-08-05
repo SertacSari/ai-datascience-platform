@@ -11,6 +11,7 @@ from app.models.user import User
 from app.schemas.analysis import AnalysisJobRunResponse
 from app.services.analysis_service import create_analysis_job
 from app.services.classification_training_service import (
+    build_classification_interpretation,
     run_analysis_job,
     validate_classification_ml_readiness,
 )
@@ -136,6 +137,13 @@ def test_valid_classification_job_can_run_and_creates_model_result(
     assert "classification_report" not in model_result.metrics
     assert "confusion_matrix" in model_result.report_json
     assert "classification_report" in model_result.report_json
+    assert "interpretation" in model_result.report_json
+    assert set(model_result.report_json["interpretation"]) == {
+        "summary",
+        "quality_level",
+        "warnings",
+        "metric_explanations",
+    }
     assert "class_distribution" not in model_result.report_json
     assert (
         db_session.query(ModelResult)
@@ -464,3 +472,95 @@ def test_duplicate_model_result_for_same_job_is_blocked_by_database(
 
     with pytest.raises(IntegrityError):
         db_session.commit()
+
+
+def test_classification_interpretation_for_good_result_has_no_metric_warnings() -> None:
+    interpretation = build_classification_interpretation(
+        metrics={
+            "accuracy": 0.91,
+            "precision": 0.9,
+            "recall": 0.89,
+            "f1_score": 0.9,
+        },
+        class_distribution={"no": 80, "yes": 70},
+    )
+
+    assert interpretation["quality_level"] == "good"
+    assert "good classification performance" in interpretation["summary"]
+    assert interpretation["warnings"] == []
+    assert interpretation["metric_explanations"]["accuracy"] == (
+        "Overall share of correct predictions."
+    )
+
+
+def test_classification_interpretation_warns_for_weak_metrics() -> None:
+    interpretation = build_classification_interpretation(
+        metrics={
+            "accuracy": 0.62,
+            "precision": 0.61,
+            "recall": 0.55,
+            "f1_score": 0.58,
+        },
+        class_distribution={"no": 80, "yes": 70},
+    )
+
+    warning_codes = {warning["code"] for warning in interpretation["warnings"]}
+
+    assert interpretation["quality_level"] == "weak"
+    assert warning_codes == {
+        "low_accuracy",
+        "low_precision",
+        "weak_f1",
+        "low_recall",
+    }
+
+
+def test_classification_interpretation_warns_for_low_precision_only() -> None:
+    interpretation = build_classification_interpretation(
+        metrics={
+            "accuracy": 0.82,
+            "precision": 0.65,
+            "recall": 0.81,
+            "f1_score": 0.78,
+        },
+        class_distribution={"no": 80, "yes": 70},
+    )
+
+    warning_codes = {warning["code"] for warning in interpretation["warnings"]}
+
+    assert interpretation["quality_level"] == "fair"
+    assert warning_codes == {"low_precision"}
+
+
+def test_classification_interpretation_warns_for_class_imbalance() -> None:
+    interpretation = build_classification_interpretation(
+        metrics={
+            "accuracy": 0.88,
+            "precision": 0.86,
+            "recall": 0.87,
+            "f1_score": 0.86,
+        },
+        class_distribution={"no": 90, "yes": 10},
+    )
+
+    warning_codes = {warning["code"] for warning in interpretation["warnings"]}
+
+    assert interpretation["quality_level"] == "good"
+    assert "class_imbalance" in warning_codes
+
+
+def test_classification_interpretation_warns_for_missing_metrics() -> None:
+    interpretation = build_classification_interpretation(
+        metrics={
+            "accuracy": 0.91,
+            "recall": 0.89,
+            "f1_score": 0.9,
+        },
+        class_distribution={"no": 80, "yes": 70},
+    )
+
+    warning_codes = {warning["code"] for warning in interpretation["warnings"]}
+
+    assert interpretation["quality_level"] == "weak"
+    assert warning_codes == {"missing_metrics"}
+    assert "missing some metrics" in interpretation["summary"]

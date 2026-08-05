@@ -828,6 +828,94 @@ small {
   white-space: nowrap;
 }
 
+.result-interpretation,
+.result-warning-panel {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  background: var(--bg);
+}
+
+.result-interpretation-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.result-interpretation strong,
+.result-warning-panel strong,
+.metric-summary-item span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+
+.result-interpretation p,
+.result-warning-panel p,
+.metric-summary-item p {
+  color: var(--muted);
+}
+
+.metric-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.metric-summary-item {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.metric-summary-item:last-child {
+  border-right: 0;
+}
+
+.metric-summary-item strong {
+  font-size: 18px;
+}
+
+.metric-summary-item p {
+  font-size: 11px;
+}
+
+.result-warning-panel.clear {
+  border-color: var(--ok);
+  background: var(--ok-tint);
+}
+
+.result-warning-panel.has-warnings {
+  border-color: var(--warn);
+  background: var(--warn-tint);
+}
+
+.result-warning-panel ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.result-warning-panel li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+
 .result-block {
   display: grid;
   gap: 8px;
@@ -1305,6 +1393,18 @@ small {
     grid-template-columns: 1fr;
   }
 
+  .metric-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .metric-summary-item:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .metric-summary-item:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--border);
+  }
+
   .job-list div {
     grid-template-columns: 1fr;
     align-items: stretch;
@@ -1315,6 +1415,15 @@ small {
   }
 
   .kpi-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .result-interpretation-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .result-warning-panel li {
     grid-template-columns: 1fr;
   }
 

@@ -104,6 +104,19 @@ function formatMetric(value) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+const FALLBACK_METRIC_EXPLANATIONS = {
+  accuracy: "Overall share of correct predictions.",
+  precision: "When the model predicts a class, how often it is correct.",
+  recall: "How many real cases of a class the model catches.",
+  f1_score: "Balance between precision and recall."
+};
+
+const QUALITY_TONES = {
+  good: "ok",
+  fair: "warn",
+  weak: "warn"
+};
+
 function isReportMetricRow(value) {
   return (
     value &&
@@ -122,6 +135,11 @@ function matrixLabels(matrix, classDistribution, reportRows) {
   if (reportLabels.length === matrix.length) return reportLabels;
 
   return matrix.map((_, index) => `Class ${index + 1}`);
+}
+
+function formatQualityLevel(level) {
+  if (!level) return "Review";
+  return `${level.charAt(0).toUpperCase()}${level.slice(1)}`;
 }
 
 function trainingErrorMessage(error) {
@@ -143,16 +161,22 @@ function ClassificationResultCard({ result }) {
   if (!modelResult) return null;
 
   const { metrics = {}, report_json: reportJson = {} } = modelResult;
+  const interpretation = reportJson.interpretation || {};
+  const metricExplanations = {
+    ...FALLBACK_METRIC_EXPLANATIONS,
+    ...(interpretation.metric_explanations || {})
+  };
+  const warnings = Array.isArray(interpretation.warnings) ? interpretation.warnings : [];
   const classDistribution = metrics.class_distribution || {};
   const confusionMatrix = Array.isArray(reportJson.confusion_matrix) ? reportJson.confusion_matrix : [];
   const classificationReport = reportJson.classification_report || {};
   const reportRows = Object.entries(classificationReport).filter(([, value]) => isReportMetricRow(value));
   const labels = matrixLabels(confusionMatrix, classDistribution, reportRows);
   const metricRows = [
-    ["Accuracy", metrics.accuracy],
-    ["Precision", metrics.precision],
-    ["Recall", metrics.recall],
-    ["F1 score", metrics.f1_score]
+    ["accuracy", "Accuracy", metrics.accuracy],
+    ["precision", "Precision", metrics.precision],
+    ["recall", "Recall", metrics.recall],
+    ["f1_score", "F1 score", metrics.f1_score]
   ];
 
   return (
@@ -165,16 +189,41 @@ function ClassificationResultCard({ result }) {
         <Badge tone="ok">{modelResult.model_name || "Saved model"}</Badge>
       </div>
 
-      <table className="result-table">
-        <tbody>
-          {metricRows.map(([label, value]) => (
-            <tr key={label}>
-              <th scope="row">{label}</th>
-              <td>{formatMetric(value)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="result-interpretation">
+        <div className="result-interpretation-head">
+          <strong>Model result</strong>
+          <Badge tone={QUALITY_TONES[interpretation.quality_level] || "neutral"}>
+            {formatQualityLevel(interpretation.quality_level)}
+          </Badge>
+        </div>
+        <p>{interpretation.summary || "Classification training completed. Review the metrics below before using the result."}</p>
+      </div>
+
+      <div className="metric-summary-grid">
+        {metricRows.map(([key, label, value]) => (
+          <div className="metric-summary-item" key={key}>
+            <span>{label}</span>
+            <strong>{formatMetric(value)}</strong>
+            <p>{metricExplanations[key] || FALLBACK_METRIC_EXPLANATIONS[key]}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className={`result-warning-panel ${warnings.length ? "has-warnings" : "clear"}`}>
+        <strong>Warnings</strong>
+        {warnings.length ? (
+          <ul>
+            {warnings.map((warning, index) => (
+              <li key={`${warning.code || "warning"}-${index}`}>
+                <Badge tone="warn">Review</Badge>
+                <span>{warning.message || warning.code || "Review this model result before using it."}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>No major result warnings were returned.</p>
+        )}
+      </div>
 
       <div className="result-block">
         <strong>Class distribution</strong>
