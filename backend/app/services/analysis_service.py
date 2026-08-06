@@ -61,24 +61,6 @@ def validate_minimum_rows(df: pd.DataFrame) -> None:
         )
 
 
-def validate_classification_target(df: pd.DataFrame, target_column: str) -> None:
-    unique_count = int(df[target_column].nunique())
-
-    if unique_count < 2:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Classification target must have at least 2 classes",
-        )
-
-
-def validate_regression_target(df: pd.DataFrame, target_column: str) -> None:
-    if not pd.api.types.is_numeric_dtype(df[target_column]):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Regression target column must be numerical",
-        )
-
-
 def validate_forecasting_target(
     df: pd.DataFrame,
     target_column: str,
@@ -142,7 +124,11 @@ def validate_task_specific_rules(
         validate_classification_ml_readiness(df, target_column)
 
     elif task_type == "regression":
-        validate_regression_target(df, target_column)
+        from app.services.regression_training_service import (
+            validate_regression_ml_readiness,
+        )
+
+        validate_regression_ml_readiness(df, target_column)
 
     elif task_type == "forecasting":
         validate_forecasting_target(df, target_column, config_json)

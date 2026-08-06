@@ -724,7 +724,7 @@ small {
 .technical-card,
 .backend-card,
 .latest-card,
-.classification-result-card {
+.model-result-card {
   grid-column: span 6;
 }
 
@@ -869,6 +869,10 @@ small {
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
+}
+
+.metric-summary-grid.count-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .metric-summary-item {
@@ -1316,7 +1320,7 @@ small {
   .technical-card,
   .backend-card,
   .latest-card,
-  .classification-result-card {
+  .model-result-card {
     grid-column: span 6;
   }
 
@@ -1385,7 +1389,7 @@ small {
   .technical-card,
   .backend-card,
   .latest-card,
-  .classification-result-card {
+  .model-result-card {
     grid-column: span 1;
   }
 
@@ -1397,12 +1401,25 @@ small {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .metric-summary-grid.count-3 {
+    grid-template-columns: 1fr;
+  }
+
   .metric-summary-item:nth-child(2n) {
     border-right: 0;
   }
 
   .metric-summary-item:nth-child(-n + 2) {
     border-bottom: 1px solid var(--border);
+  }
+
+  .metric-summary-grid.count-3 .metric-summary-item {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .metric-summary-grid.count-3 .metric-summary-item:last-child {
+    border-bottom: 0;
   }
 
   .job-list div {

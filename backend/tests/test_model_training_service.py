@@ -9,12 +9,13 @@ from app.models.enums import JobStatus, TaskType
 from app.models.model_result import ModelResult
 from app.models.user import User
 from app.schemas.analysis import AnalysisJobRunResponse
-from app.services.analysis_service import create_analysis_job
+from app.services.analysis_service import create_analysis_job, get_analysis_job_result
 from app.services.classification_training_service import (
     build_classification_interpretation,
-    run_analysis_job,
     validate_classification_ml_readiness,
 )
+from app.services.model_training_service import run_analysis_job
+from app.services.regression_training_service import build_regression_interpretation
 
 
 def add_user(db_session, username: str) -> User:
@@ -105,6 +106,50 @@ def valid_classification_frame(row_count: int = 40) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def valid_regression_frame(row_count: int = 80) -> pd.DataFrame:
+    rows = []
+    for index in range(row_count):
+        size = 700 + (index * 13)
+        rooms = 2 + (index % 4)
+        neighborhood = "central" if index % 3 == 0 else "suburban"
+        neighborhood_bonus = 25_000 if neighborhood == "central" else 8_000
+        price = 50_000 + (size * 180) + (rooms * 12_000) + neighborhood_bonus
+        rows.append(
+            {
+                "size_sqft": size,
+                "rooms": rooms,
+                "neighborhood": neighborhood,
+                "price": price,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def assert_regression_create_rejected_without_job(
+    db_session,
+    tmp_path,
+    dataframe: pd.DataFrame,
+    expected_detail: str,
+    username: str,
+) -> None:
+    user = add_user(db_session, username)
+    dataset = add_dataset_with_frame(db_session, tmp_path, user, dataframe)
+
+    with pytest.raises(HTTPException) as error:
+        create_analysis_job(
+            db=db_session,
+            dataset_id=dataset.id,
+            task_type=TaskType.REGRESSION,
+            target_column="price",
+            config_json={},
+            current_user=user,
+        )
+
+    assert error.value.status_code == 400
+    assert expected_detail in error.value.detail
+    assert db_session.query(AnalysisJob).count() == 0
+
+
 def test_valid_classification_job_can_run_and_creates_model_result(
     db_session,
     tmp_path,
@@ -174,29 +219,272 @@ def test_non_owned_job_cannot_run(db_session, tmp_path) -> None:
     assert error.value.status_code == 404
 
 
-@pytest.mark.parametrize(
-    "task_type",
-    [TaskType.REGRESSION, TaskType.FORECASTING],
-)
-def test_regression_and_forecasting_jobs_cannot_run_yet(
+def test_forecasting_jobs_cannot_run_yet(
     db_session,
     tmp_path,
-    task_type: TaskType,
 ) -> None:
-    user = add_user(db_session, f"user_{task_type.value}")
+    user = add_user(db_session, "forecasting_user")
     dataset = add_dataset_with_frame(
         db_session,
         tmp_path,
         user,
         valid_classification_frame(),
     )
-    job = add_analysis_job(db_session, user, dataset, task_type=task_type)
+    job = add_analysis_job(db_session, user, dataset, task_type=TaskType.FORECASTING)
 
     with pytest.raises(HTTPException) as error:
         run_analysis_job(db_session, job.id, user)
 
     assert error.value.status_code == 400
-    assert "Only classification jobs" in error.value.detail
+    assert "Only classification and regression jobs" in error.value.detail
+
+
+def test_valid_regression_job_can_run_and_creates_model_result(
+    db_session,
+    tmp_path,
+) -> None:
+    user = add_user(db_session, "regression_owner")
+    dataset = add_dataset_with_frame(
+        db_session,
+        tmp_path,
+        user,
+        valid_regression_frame(),
+    )
+    job = add_analysis_job(
+        db_session,
+        user,
+        dataset,
+        task_type=TaskType.REGRESSION,
+        target_column="price",
+    )
+
+    updated_job, model_result = run_analysis_job(db_session, job.id, user)
+    persisted_result = get_analysis_job_result(db_session, job.id, user)
+
+    assert updated_job.status == JobStatus.COMPLETED
+    assert model_result.id == persisted_result.id
+    assert model_result.model_name == "RandomForestRegressor"
+    assert set(model_result.metrics) >= {
+        "mae",
+        "rmse",
+        "r2_score",
+        "target_mean",
+        "target_min",
+        "target_max",
+        "test_size",
+        "model_name",
+    }
+    assert model_result.metrics["model_name"] == "RandomForestRegressor"
+    assert "prediction_sample" in model_result.report_json
+    assert len(model_result.report_json["prediction_sample"]) <= 10
+    assert set(model_result.report_json["prediction_sample"][0]) == {
+        "actual",
+        "predicted",
+    }
+    assert "interpretation" in model_result.report_json
+    assert set(model_result.report_json["interpretation"]) == {
+        "summary",
+        "quality_level",
+        "warnings",
+        "metric_explanations",
+    }
+
+
+def test_valid_regression_request_creates_job_with_created_status(
+    db_session,
+    tmp_path,
+) -> None:
+    user = add_user(db_session, "regression_create_valid")
+    dataset = add_dataset_with_frame(
+        db_session,
+        tmp_path,
+        user,
+        valid_regression_frame(),
+    )
+
+    job = create_analysis_job(
+        db=db_session,
+        dataset_id=dataset.id,
+        task_type=TaskType.REGRESSION,
+        target_column="price",
+        config_json={},
+        current_user=user,
+    )
+
+    assert job.status == JobStatus.CREATED
+    assert job.task_type == TaskType.REGRESSION
+    assert job.target_column == "price"
+
+
+def test_non_owned_regression_job_cannot_run(db_session, tmp_path) -> None:
+    owner = add_user(db_session, "regression_owner")
+    other_user = add_user(db_session, "regression_other")
+    dataset = add_dataset_with_frame(
+        db_session,
+        tmp_path,
+        owner,
+        valid_regression_frame(),
+    )
+    job = add_analysis_job(
+        db_session,
+        owner,
+        dataset,
+        task_type=TaskType.REGRESSION,
+        target_column="price",
+    )
+
+    with pytest.raises(HTTPException) as error:
+        run_analysis_job(db_session, job.id, other_user)
+
+    assert error.value.status_code == 404
+
+
+def test_regression_rejects_non_numeric_target(db_session, tmp_path) -> None:
+    user = add_user(db_session, "regression_non_numeric")
+    dataset = add_dataset_with_frame(
+        db_session,
+        tmp_path,
+        user,
+        valid_classification_frame(),
+    )
+    job = add_analysis_job(
+        db_session,
+        user,
+        dataset,
+        task_type=TaskType.REGRESSION,
+        target_column="target",
+    )
+
+    with pytest.raises(HTTPException) as error:
+        run_analysis_job(db_session, job.id, user)
+
+    assert error.value.status_code == 400
+    assert "Regression target column must be numerical" in error.value.detail
+
+
+@pytest.mark.parametrize(
+    "target_value,expected_detail",
+    [
+        (None, "missing values"),
+        (float("inf"), "finite values"),
+    ],
+)
+def test_regression_rejects_missing_or_infinite_target(
+    db_session,
+    tmp_path,
+    target_value,
+    expected_detail: str,
+) -> None:
+    user = add_user(db_session, f"regression_{expected_detail.replace(' ', '_')}")
+    dataframe = valid_regression_frame()
+    dataframe["price"] = dataframe["price"].astype(float)
+    dataframe.loc[0, "price"] = target_value
+    dataset = add_dataset_with_frame(db_session, tmp_path, user, dataframe)
+    job = add_analysis_job(
+        db_session,
+        user,
+        dataset,
+        task_type=TaskType.REGRESSION,
+        target_column="price",
+    )
+
+    with pytest.raises(HTTPException) as error:
+        run_analysis_job(db_session, job.id, user)
+
+    assert error.value.status_code == 400
+    assert expected_detail in error.value.detail
+
+
+def test_regression_rejects_no_usable_feature_columns(db_session, tmp_path) -> None:
+    user = add_user(db_session, "regression_no_features")
+    dataframe = pd.DataFrame({"price": [100_000 + index for index in range(20)]})
+    dataset = add_dataset_with_frame(db_session, tmp_path, user, dataframe)
+    job = add_analysis_job(
+        db_session,
+        user,
+        dataset,
+        task_type=TaskType.REGRESSION,
+        target_column="price",
+    )
+
+    with pytest.raises(HTTPException) as error:
+        run_analysis_job(db_session, job.id, user)
+
+    assert error.value.status_code == 400
+    assert "feature column" in error.value.detail
+
+
+def test_create_regression_job_rejects_non_numeric_target(
+    db_session,
+    tmp_path,
+) -> None:
+    dataframe = valid_classification_frame()
+    dataframe = dataframe.rename(columns={"target": "price"})
+
+    assert_regression_create_rejected_without_job(
+        db_session=db_session,
+        tmp_path=tmp_path,
+        dataframe=dataframe,
+        expected_detail="Regression target column must be numerical",
+        username="create_regression_non_numeric",
+    )
+
+
+@pytest.mark.parametrize(
+    "target_value,expected_detail,username",
+    [
+        (None, "missing values", "create_regression_missing"),
+        (float("inf"), "finite values", "create_regression_infinite"),
+    ],
+)
+def test_create_regression_job_rejects_missing_or_infinite_target(
+    db_session,
+    tmp_path,
+    target_value,
+    expected_detail: str,
+    username: str,
+) -> None:
+    dataframe = valid_regression_frame()
+    dataframe["price"] = dataframe["price"].astype(float)
+    dataframe.loc[0, "price"] = target_value
+
+    assert_regression_create_rejected_without_job(
+        db_session=db_session,
+        tmp_path=tmp_path,
+        dataframe=dataframe,
+        expected_detail=expected_detail,
+        username=username,
+    )
+
+
+def test_create_regression_job_rejects_no_usable_feature_columns(
+    db_session,
+    tmp_path,
+) -> None:
+    dataframe = pd.DataFrame({"price": [100_000 + index for index in range(20)]})
+
+    assert_regression_create_rejected_without_job(
+        db_session=db_session,
+        tmp_path=tmp_path,
+        dataframe=dataframe,
+        expected_detail="feature column",
+        username="create_regression_no_features",
+    )
+
+
+def test_create_regression_job_rejects_too_few_rows(
+    db_session,
+    tmp_path,
+) -> None:
+    dataframe = valid_regression_frame(row_count=19)
+
+    assert_regression_create_rejected_without_job(
+        db_session=db_session,
+        tmp_path=tmp_path,
+        dataframe=dataframe,
+        expected_detail="at least 20 rows",
+        username="create_regression_too_few_rows",
+    )
 
 
 @pytest.mark.parametrize(
@@ -557,6 +845,64 @@ def test_classification_interpretation_warns_for_missing_metrics() -> None:
             "f1_score": 0.9,
         },
         class_distribution={"no": 80, "yes": 70},
+    )
+
+    warning_codes = {warning["code"] for warning in interpretation["warnings"]}
+
+    assert interpretation["quality_level"] == "weak"
+    assert warning_codes == {"missing_metrics"}
+    assert "missing some metrics" in interpretation["summary"]
+
+
+def test_regression_interpretation_warns_for_weak_r2_and_high_error() -> None:
+    interpretation = build_regression_interpretation(
+        metrics={
+            "mae": 25.0,
+            "rmse": 40.0,
+            "r2_score": 0.35,
+            "target_mean": 100.0,
+            "target_min": 50.0,
+            "target_max": 150.0,
+        },
+        row_count=150,
+    )
+
+    warning_codes = {warning["code"] for warning in interpretation["warnings"]}
+
+    assert interpretation["quality_level"] == "weak"
+    assert {"weak_r2", "high_error"} <= warning_codes
+    assert interpretation["metric_explanations"]["rmse"] == (
+        "Typical prediction error, with larger mistakes weighted more heavily."
+    )
+
+
+def test_regression_interpretation_warns_for_small_dataset() -> None:
+    interpretation = build_regression_interpretation(
+        metrics={
+            "mae": 5.0,
+            "rmse": 8.0,
+            "r2_score": 0.75,
+            "target_mean": 100.0,
+            "target_min": 50.0,
+            "target_max": 150.0,
+        },
+        row_count=80,
+    )
+
+    warning_codes = {warning["code"] for warning in interpretation["warnings"]}
+
+    assert interpretation["quality_level"] == "good"
+    assert warning_codes == {"small_dataset"}
+
+
+def test_regression_interpretation_warns_for_missing_metrics() -> None:
+    interpretation = build_regression_interpretation(
+        metrics={
+            "mae": 5.0,
+            "rmse": 8.0,
+            "r2_score": 0.75,
+        },
+        row_count=150,
     )
 
     warning_codes = {warning["code"] for warning in interpretation["warnings"]}

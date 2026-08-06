@@ -19,7 +19,7 @@ from app.services.analysis_service import (
     get_analysis_job_result,
     list_analysis_jobs,
 )
-from app.services.classification_training_service import run_analysis_job
+from app.services.model_training_service import run_analysis_job
 
 
 router = APIRouter(

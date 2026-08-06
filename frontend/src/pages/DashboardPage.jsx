@@ -99,16 +99,27 @@ function DatasetPreviewCard({ dataset, preview }) {
   );
 }
 
-function formatMetric(value) {
+function formatPercentageMetric(value) {
   if (typeof value !== "number") return value ?? "Not available";
   return `${(value * 100).toFixed(1)}%`;
 }
 
-const FALLBACK_METRIC_EXPLANATIONS = {
+function formatNumberMetric(value) {
+  if (typeof value !== "number") return value ?? "Not available";
+  return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+const CLASSIFICATION_METRIC_EXPLANATIONS = {
   accuracy: "Overall share of correct predictions.",
   precision: "When the model predicts a class, how often it is correct.",
   recall: "How many real cases of a class the model catches.",
   f1_score: "Balance between precision and recall."
+};
+
+const REGRESSION_METRIC_EXPLANATIONS = {
+  mae: "Average absolute prediction error in target units.",
+  rmse: "Error metric that penalizes large mistakes more.",
+  r2_score: "How much target variation the model explains on the test split."
 };
 
 const QUALITY_TONES = {
@@ -142,18 +153,74 @@ function formatQualityLevel(level) {
   return `${level.charAt(0).toUpperCase()}${level.slice(1)}`;
 }
 
+function modelNameFromResult(modelResult) {
+  return modelResult?.model_name || modelResult?.metrics?.model_name || modelResult?.report_json?.model_name || "Saved model";
+}
+
+function ResultInterpretation({ fallbackSummary, interpretation }) {
+  return (
+    <div className="result-interpretation">
+      <div className="result-interpretation-head">
+        <strong>Model result</strong>
+        <Badge tone={QUALITY_TONES[interpretation.quality_level] || "neutral"}>
+          {formatQualityLevel(interpretation.quality_level)}
+        </Badge>
+      </div>
+      <p>{interpretation.summary || fallbackSummary}</p>
+    </div>
+  );
+}
+
+function ResultWarnings({ warnings }) {
+  return (
+    <div className={`result-warning-panel ${warnings.length ? "has-warnings" : "clear"}`}>
+      <strong>Warnings</strong>
+      {warnings.length ? (
+        <ul>
+          {warnings.map((warning, index) => (
+            <li key={`${warning.code || "warning"}-${index}`}>
+              <Badge tone="warn">Review</Badge>
+              <span>{warning.message || warning.code || "Review this model result before using it."}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p>No major result warnings were returned.</p>
+      )}
+    </div>
+  );
+}
+
+function MetricSummaryGrid({ rows }) {
+  return (
+    <div className={`metric-summary-grid count-${rows.length}`}>
+      {rows.map(([key, label, value, explanation]) => (
+        <div className="metric-summary-item" key={key}>
+          <span>{label}</span>
+          <strong>{value}</strong>
+          <p>{explanation}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function isRunnableTask(taskType) {
+  return taskType === "classification" || taskType === "regression";
+}
+
 function trainingErrorMessage(error) {
   const message = error?.message || "";
 
   if (error?.status === 409 || /Only created jobs can be run/i.test(message)) {
-    return "This job has already been completed. This job cannot be run again from this phase. Refresh jobs and choose a created classification job.";
+    return "This job has already been completed. This job cannot be run again from this phase. Refresh jobs and choose a created classification or regression job.";
   }
 
   if (error?.status === 401) {
     return "Your session expired. Please log in again.";
   }
 
-  return message || "Training failed. Check that the dataset and target column are suitable for classification.";
+  return message || "Training failed. Check that the dataset and target column are suitable for this model type.";
 }
 
 function ClassificationResultCard({ result }) {
@@ -163,7 +230,7 @@ function ClassificationResultCard({ result }) {
   const { metrics = {}, report_json: reportJson = {} } = modelResult;
   const interpretation = reportJson.interpretation || {};
   const metricExplanations = {
-    ...FALLBACK_METRIC_EXPLANATIONS,
+    ...CLASSIFICATION_METRIC_EXPLANATIONS,
     ...(interpretation.metric_explanations || {})
   };
   const warnings = Array.isArray(interpretation.warnings) ? interpretation.warnings : [];
@@ -180,50 +247,30 @@ function ClassificationResultCard({ result }) {
   ];
 
   return (
-    <section className="card classification-result-card">
+    <section className="card model-result-card">
       <div className="card-head">
         <div>
           <p className="eyebrow">Classification result</p>
           <h2>{result?.job?.id ? `Job #${result.job.id} completed` : "Completed job result"}</h2>
         </div>
-        <Badge tone="ok">{modelResult.model_name || "Saved model"}</Badge>
+        <Badge tone="ok">{modelNameFromResult(modelResult)}</Badge>
       </div>
 
-      <div className="result-interpretation">
-        <div className="result-interpretation-head">
-          <strong>Model result</strong>
-          <Badge tone={QUALITY_TONES[interpretation.quality_level] || "neutral"}>
-            {formatQualityLevel(interpretation.quality_level)}
-          </Badge>
-        </div>
-        <p>{interpretation.summary || "Classification training completed. Review the metrics below before using the result."}</p>
-      </div>
+      <ResultInterpretation
+        fallbackSummary="Classification training completed. Review the metrics below before using the result."
+        interpretation={interpretation}
+      />
 
-      <div className="metric-summary-grid">
-        {metricRows.map(([key, label, value]) => (
-          <div className="metric-summary-item" key={key}>
-            <span>{label}</span>
-            <strong>{formatMetric(value)}</strong>
-            <p>{metricExplanations[key] || FALLBACK_METRIC_EXPLANATIONS[key]}</p>
-          </div>
-        ))}
-      </div>
+      <MetricSummaryGrid
+        rows={metricRows.map(([key, label, value]) => [
+          key,
+          label,
+          formatPercentageMetric(value),
+          metricExplanations[key] || CLASSIFICATION_METRIC_EXPLANATIONS[key]
+        ])}
+      />
 
-      <div className={`result-warning-panel ${warnings.length ? "has-warnings" : "clear"}`}>
-        <strong>Warnings</strong>
-        {warnings.length ? (
-          <ul>
-            {warnings.map((warning, index) => (
-              <li key={`${warning.code || "warning"}-${index}`}>
-                <Badge tone="warn">Review</Badge>
-                <span>{warning.message || warning.code || "Review this model result before using it."}</span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p>No major result warnings were returned.</p>
-        )}
-      </div>
+      <ResultWarnings warnings={warnings} />
 
       <div className="result-block">
         <strong>Class distribution</strong>
@@ -289,9 +336,9 @@ function ClassificationResultCard({ result }) {
                 {reportRows.map(([label, values]) => (
                   <tr key={label}>
                     <th scope="row">{label}</th>
-                    <td>{formatMetric(values.precision)}</td>
-                    <td>{formatMetric(values.recall)}</td>
-                    <td>{formatMetric(values["f1-score"])}</td>
+                    <td>{formatPercentageMetric(values.precision)}</td>
+                    <td>{formatPercentageMetric(values.recall)}</td>
+                    <td>{formatPercentageMetric(values["f1-score"])}</td>
                     <td>{values.support ?? "Not available"}</td>
                   </tr>
                 ))}
@@ -304,6 +351,127 @@ function ClassificationResultCard({ result }) {
       </div>
     </section>
   );
+}
+
+function RegressionResultCard({ result }) {
+  const modelResult = result?.model_result || result;
+  if (!modelResult) return null;
+
+  const { metrics = {}, report_json: reportJson = {} } = modelResult;
+  const interpretation = reportJson.interpretation || {};
+  const metricExplanations = {
+    ...REGRESSION_METRIC_EXPLANATIONS,
+    ...(interpretation.metric_explanations || {})
+  };
+  const warnings = Array.isArray(interpretation.warnings) ? interpretation.warnings : [];
+  const predictionSample = Array.isArray(reportJson.prediction_sample) ? reportJson.prediction_sample : [];
+  const numericFeatures = Array.isArray(reportJson.numeric_features) ? reportJson.numeric_features : [];
+  const categoricalFeatures = Array.isArray(reportJson.categorical_features) ? reportJson.categorical_features : [];
+  const metricRows = [
+    ["mae", "MAE", formatNumberMetric(metrics.mae), metricExplanations.mae],
+    ["rmse", "RMSE", formatNumberMetric(metrics.rmse), metricExplanations.rmse],
+    ["r2_score", "R² score", formatPercentageMetric(metrics.r2_score), metricExplanations.r2_score]
+  ];
+
+  return (
+    <section className="card model-result-card">
+      <div className="card-head">
+        <div>
+          <p className="eyebrow">Regression result</p>
+          <h2>{result?.job?.id ? `Job #${result.job.id} completed` : "Completed job result"}</h2>
+        </div>
+        <Badge tone="ok">{modelNameFromResult(modelResult)}</Badge>
+      </div>
+
+      <ResultInterpretation
+        fallbackSummary="Regression training completed. Review the prediction errors and sample rows before using the result."
+        interpretation={interpretation}
+      />
+
+      <MetricSummaryGrid rows={metricRows} />
+
+      <ResultWarnings warnings={warnings} />
+
+      <div className="result-block">
+        <strong>Target summary</strong>
+        <table className="result-table">
+          <tbody>
+            <tr>
+              <th scope="row">Target mean</th>
+              <td>{formatNumberMetric(metrics.target_mean)}</td>
+            </tr>
+            <tr>
+              <th scope="row">Target min</th>
+              <td>{formatNumberMetric(metrics.target_min)}</td>
+            </tr>
+            <tr>
+              <th scope="row">Target max</th>
+              <td>{formatNumberMetric(metrics.target_max)}</td>
+            </tr>
+            <tr>
+              <th scope="row">Test size</th>
+              <td>{formatPercentageMetric(metrics.test_size)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div className="result-block">
+        <strong>Prediction sample</strong>
+        {predictionSample.length ? (
+          <div className="table-wrap">
+            <table className="result-table prediction-table">
+              <thead>
+                <tr>
+                  <th scope="col">Actual</th>
+                  <th scope="col">Predicted</th>
+                  <th scope="col">Difference</th>
+                </tr>
+              </thead>
+              <tbody>
+                {predictionSample.map((row, index) => {
+                  const hasDifference = typeof row.actual === "number" && typeof row.predicted === "number";
+                  const difference = hasDifference ? row.predicted - row.actual : null;
+
+                  return (
+                    <tr key={`${row.actual ?? "actual"}-${row.predicted ?? "predicted"}-${index}`}>
+                      <td>{formatNumberMetric(row.actual)}</td>
+                      <td>{formatNumberMetric(row.predicted)}</td>
+                      <td>{hasDifference ? formatNumberMetric(difference) : "Not available"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="muted">No prediction sample was returned.</p>
+        )}
+      </div>
+
+      <div className="result-block">
+        <strong>Model features</strong>
+        <p className="muted">
+          Numeric: {numericFeatures.length ? numericFeatures.slice(0, 6).join(", ") : "Not available"}
+        </p>
+        <p className="muted">
+          Categorical: {categoricalFeatures.length ? categoricalFeatures.slice(0, 6).join(", ") : "Not available"}
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function ModelResultCard({ result }) {
+  if (!result) return null;
+  const taskType = result.job?.task_type;
+  const modelResult = result.model_result || result;
+
+  if (taskType === "regression" || "mae" in (modelResult.metrics || {})) {
+    return <RegressionResultCard result={result} />;
+  }
+
+  return <ClassificationResultCard result={result} />;
 }
 
 export default function DashboardPage() {
@@ -319,7 +487,7 @@ export default function DashboardPage() {
   const [cleanStatus, setCleanStatus] = useState({ type: "idle", message: "" });
   const [jobStatus, setJobStatus] = useState({ type: "idle", message: "" });
   const [runStatus, setRunStatus] = useState({ jobId: null, type: "idle", message: "" });
-  const [classificationResult, setClassificationResult] = useState(null);
+  const [modelResult, setModelResult] = useState(null);
   const { cleanResult, cleaning, dataset, preview } = dashboardData;
   const stats = dashboardStats(dataset, cleaning, jobs);
   const technical = technicalFromBackend(cleaning, preview);
@@ -420,17 +588,17 @@ export default function DashboardPage() {
   }
 
   async function handleRunJob(job) {
-    setRunStatus({ jobId: job.id, type: "loading", message: `Running classification job #${job.id}...` });
-    setClassificationResult(null);
+    setRunStatus({ jobId: job.id, type: "loading", message: `Running ${job.task_type} job #${job.id}...` });
+    setModelResult(null);
     try {
       const result = await runAnalysisJob(job.id);
       const nextJobs = await listAnalysisJobs();
       setJobs(nextJobs);
-      setClassificationResult(result);
+      setModelResult(result);
       setRunStatus({
         jobId: job.id,
         type: "success",
-        message: `Classification job #${job.id} completed.`
+        message: `${job.task_type.charAt(0).toUpperCase()}${job.task_type.slice(1)} job #${job.id} completed.`
       });
     } catch (error) {
       const nextJobs = await listAnalysisJobs().catch(() => jobs);
@@ -446,12 +614,12 @@ export default function DashboardPage() {
   async function handleViewResult(job) {
     setRunStatus({ jobId: job.id, type: "loading", message: `Loading saved result for job #${job.id}...` });
     try {
-      const modelResult = await getAnalysisJobResult(job.id);
-      setClassificationResult({ job, model_result: modelResult });
+      const savedModelResult = await getAnalysisJobResult(job.id);
+      setModelResult({ job, model_result: savedModelResult });
       setRunStatus({
         jobId: job.id,
         type: "success",
-        message: `Loaded saved classification result for job #${job.id}.`
+        message: `Loaded saved ${job.task_type} result for job #${job.id}.`
       });
     } catch (error) {
       setRunStatus({
@@ -596,11 +764,11 @@ export default function DashboardPage() {
           </form>
           <p className="muted">
             {dataset
-              ? "Create the job first; classification jobs can be run here."
+              ? "Create the job first; classification and regression jobs can be run here."
               : "Upload a dataset to enable backend analysis requests."}
           </p>
           <p className="muted">
-            Classification training is available. Regression and forecasting training come later.
+            Classification and regression training are available. Forecasting training comes later.
           </p>
           {numericColumns.length ? <p className="muted">Numeric columns: {numericColumns.slice(0, 4).join(", ")}</p> : null}
           {jobStatus.message ? <div aria-live="polite" className={`backend-status ${jobStatus.type}`} role="status">{jobStatus.message}</div> : null}
@@ -612,7 +780,7 @@ export default function DashboardPage() {
                   <strong>#{job.id} {job.task_type}</strong>
                   <span>{job.target_column}</span>
                   <Badge tone={job.status === "failed" ? "err" : job.status === "completed" ? "ok" : "warn"}>{job.status}</Badge>
-                  {job.task_type === "classification" && job.status === "created" ? (
+                  {isRunnableTask(job.task_type) && job.status === "created" ? (
                     <button
                       className="button sm"
                       disabled={runStatus.type === "loading"}
@@ -622,7 +790,7 @@ export default function DashboardPage() {
                       {runStatus.type === "loading" && runStatus.jobId === job.id ? "Running..." : "Run job"}
                     </button>
                   ) : null}
-                  {job.task_type === "classification" && job.status === "completed" ? (
+                  {isRunnableTask(job.task_type) && job.status === "completed" ? (
                     <button
                       className="button sm"
                       disabled={runStatus.type === "loading"}
@@ -638,7 +806,7 @@ export default function DashboardPage() {
           ) : null}
         </section>
 
-        <ClassificationResultCard result={classificationResult} />
+        <ModelResultCard result={modelResult} />
         <DatasetPreviewCard dataset={dataset} preview={preview} />
       </section>
     </main>

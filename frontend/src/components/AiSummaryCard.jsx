@@ -34,7 +34,7 @@ export default function AiSummaryCard({ cleaning, dataset, preview }) {
             Upload a dataset to load backend preview details and cleaning checks.
           </p>
           <p>
-            This view creates analysis jobs only. Model training and generated results come later.
+            Classification and regression jobs can run here. Forecasting and final reports come later.
           </p>
         </>
       )}
