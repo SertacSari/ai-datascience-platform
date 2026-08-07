@@ -14,6 +14,7 @@ from app.services.classification_training_service import (
     build_classification_interpretation,
     validate_classification_ml_readiness,
 )
+from app.services.forecasting_training_service import build_forecasting_interpretation
 from app.services.model_training_service import run_analysis_job
 from app.services.regression_training_service import build_regression_interpretation
 
@@ -78,12 +79,14 @@ def add_analysis_job(
     dataset: Dataset,
     task_type: TaskType = TaskType.CLASSIFICATION,
     target_column: str = "target",
+    config_json: dict | None = None,
 ) -> AnalysisJob:
     job = AnalysisJob(
         user_id=user.id,
         dataset_id=dataset.id,
         task_type=task_type,
         target_column=target_column,
+        config_json=config_json or {},
     )
     db_session.add(job)
     db_session.commit()
@@ -120,6 +123,25 @@ def valid_regression_frame(row_count: int = 80) -> pd.DataFrame:
                 "rooms": rooms,
                 "neighborhood": neighborhood,
                 "price": price,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def valid_forecasting_frame(row_count: int = 60) -> pd.DataFrame:
+    rows = []
+    start_date = pd.Timestamp("2026-01-01")
+    for index in range(row_count):
+        date = start_date + pd.Timedelta(days=index)
+        promotion = "yes" if index % 10 in {0, 1} else "no"
+        promotion_bonus = 45 if promotion == "yes" else 0
+        sales = 200 + (index * 3.5) + ((index % 7) * 8) + promotion_bonus
+        rows.append(
+            {
+                "date": date.date().isoformat(),
+                "promotion": promotion,
+                "store_visits": 100 + (index * 2),
+                "sales": sales,
             }
         )
     return pd.DataFrame(rows)
@@ -219,7 +241,7 @@ def test_non_owned_job_cannot_run(db_session, tmp_path) -> None:
     assert error.value.status_code == 404
 
 
-def test_forecasting_jobs_cannot_run_yet(
+def test_valid_forecasting_job_can_run_and_creates_model_result(
     db_session,
     tmp_path,
 ) -> None:
@@ -228,15 +250,329 @@ def test_forecasting_jobs_cannot_run_yet(
         db_session,
         tmp_path,
         user,
-        valid_classification_frame(),
+        valid_forecasting_frame(),
     )
-    job = add_analysis_job(db_session, user, dataset, task_type=TaskType.FORECASTING)
+    job = add_analysis_job(
+        db_session,
+        user,
+        dataset,
+        task_type=TaskType.FORECASTING,
+        target_column="sales",
+        config_json={"date_column": "date"},
+    )
+
+    updated_job, model_result = run_analysis_job(db_session, job.id, user)
+    persisted_result = get_analysis_job_result(db_session, job.id, user)
+
+    assert updated_job.status == JobStatus.COMPLETED
+    assert model_result.id == persisted_result.id
+    assert model_result.model_name == "RandomForestRegressorForecasting"
+    assert set(model_result.metrics) >= {
+        "mae",
+        "rmse",
+        "mape",
+        "r2_score",
+        "target_mean",
+        "target_min",
+        "target_max",
+        "test_size",
+        "model_name",
+    }
+    assert model_result.metrics["model_name"] == "RandomForestRegressorForecasting"
+    assert "prediction_sample" in model_result.report_json
+    assert len(model_result.report_json["prediction_sample"]) <= 10
+    assert set(model_result.report_json["prediction_sample"][0]) == {
+        "date",
+        "actual",
+        "predicted",
+    }
+    assert model_result.report_json["date_column"] == "date"
+    assert model_result.report_json["target_column"] == "sales"
+    assert model_result.report_json["test_start_date"] < model_result.report_json[
+        "test_end_date"
+    ]
+    assert "numeric_features" in model_result.report_json
+    assert "categorical_features" in model_result.report_json
+    assert "interpretation" in model_result.report_json
+    assert set(model_result.report_json["interpretation"]) == {
+        "summary",
+        "quality_level",
+        "warnings",
+        "metric_explanations",
+    }
+
+
+def test_non_owned_forecasting_job_cannot_run(db_session, tmp_path) -> None:
+    owner = add_user(db_session, "forecasting_owner")
+    other_user = add_user(db_session, "forecasting_other")
+    dataset = add_dataset_with_frame(
+        db_session,
+        tmp_path,
+        owner,
+        valid_forecasting_frame(),
+    )
+    job = add_analysis_job(
+        db_session,
+        owner,
+        dataset,
+        task_type=TaskType.FORECASTING,
+        target_column="sales",
+        config_json={"date_column": "date"},
+    )
+
+    with pytest.raises(HTTPException) as error:
+        run_analysis_job(db_session, job.id, other_user)
+
+    assert error.value.status_code == 404
+
+
+def test_forecasting_rejects_missing_date_column_config(
+    db_session,
+    tmp_path,
+) -> None:
+    user = add_user(db_session, "forecasting_missing_config")
+    dataset = add_dataset_with_frame(
+        db_session,
+        tmp_path,
+        user,
+        valid_forecasting_frame(),
+    )
+    job = add_analysis_job(
+        db_session,
+        user,
+        dataset,
+        task_type=TaskType.FORECASTING,
+        target_column="sales",
+        config_json={},
+    )
 
     with pytest.raises(HTTPException) as error:
         run_analysis_job(db_session, job.id, user)
 
     assert error.value.status_code == 400
-    assert "Only classification and regression jobs" in error.value.detail
+    assert "config_json.date_column" in error.value.detail
+
+
+@pytest.mark.parametrize(
+    "date_value,expected_detail",
+    [
+        ("not-a-date", "invalid or missing dates"),
+        (None, "invalid or missing dates"),
+    ],
+)
+def test_forecasting_rejects_invalid_dates(
+    db_session,
+    tmp_path,
+    date_value,
+    expected_detail: str,
+) -> None:
+    user = add_user(db_session, "forecasting_invalid_dates")
+    dataframe = valid_forecasting_frame()
+    dataframe.loc[0, "date"] = date_value
+    dataset = add_dataset_with_frame(db_session, tmp_path, user, dataframe)
+    job = add_analysis_job(
+        db_session,
+        user,
+        dataset,
+        task_type=TaskType.FORECASTING,
+        target_column="sales",
+        config_json={"date_column": "date"},
+    )
+
+    with pytest.raises(HTTPException) as error:
+        run_analysis_job(db_session, job.id, user)
+
+    assert error.value.status_code == 400
+    assert expected_detail in error.value.detail
+
+
+def test_forecasting_rejects_duplicate_dates(db_session, tmp_path) -> None:
+    user = add_user(db_session, "forecasting_duplicate_dates")
+    dataframe = valid_forecasting_frame()
+    dataframe.loc[1, "date"] = dataframe.loc[0, "date"]
+    dataset = add_dataset_with_frame(db_session, tmp_path, user, dataframe)
+    job = add_analysis_job(
+        db_session,
+        user,
+        dataset,
+        task_type=TaskType.FORECASTING,
+        target_column="sales",
+        config_json={"date_column": "date"},
+    )
+
+    with pytest.raises(HTTPException) as error:
+        run_analysis_job(db_session, job.id, user)
+
+    assert error.value.status_code == 400
+    assert "unique values" in error.value.detail
+
+
+def test_forecasting_rejects_date_column_same_as_target(db_session, tmp_path) -> None:
+    user = add_user(db_session, "forecasting_same_date_target")
+    dataset = add_dataset_with_frame(
+        db_session,
+        tmp_path,
+        user,
+        valid_forecasting_frame(),
+    )
+    job = add_analysis_job(
+        db_session,
+        user,
+        dataset,
+        task_type=TaskType.FORECASTING,
+        target_column="sales",
+        config_json={"date_column": "sales"},
+    )
+
+    with pytest.raises(HTTPException) as error:
+        run_analysis_job(db_session, job.id, user)
+
+    assert error.value.status_code == 400
+    assert "different from target" in error.value.detail
+
+
+def test_forecasting_rejects_non_numeric_target(db_session, tmp_path) -> None:
+    user = add_user(db_session, "forecasting_non_numeric_target")
+    dataframe = valid_forecasting_frame()
+    dataframe["sales"] = [
+        "high" if index % 2 else "low" for index in range(len(dataframe))
+    ]
+    dataset = add_dataset_with_frame(db_session, tmp_path, user, dataframe)
+    job = add_analysis_job(
+        db_session,
+        user,
+        dataset,
+        task_type=TaskType.FORECASTING,
+        target_column="sales",
+        config_json={"date_column": "date"},
+    )
+
+    with pytest.raises(HTTPException) as error:
+        run_analysis_job(db_session, job.id, user)
+
+    assert error.value.status_code == 400
+    assert "Forecasting target column must be numerical" in error.value.detail
+
+
+@pytest.mark.parametrize(
+    "target_value,expected_detail",
+    [
+        (None, "missing values"),
+        (float("inf"), "finite values"),
+    ],
+)
+def test_forecasting_rejects_missing_or_infinite_target(
+    db_session,
+    tmp_path,
+    target_value,
+    expected_detail: str,
+) -> None:
+    user = add_user(db_session, f"forecasting_{expected_detail.replace(' ', '_')}")
+    dataframe = valid_forecasting_frame()
+    dataframe["sales"] = dataframe["sales"].astype(float)
+    dataframe.loc[0, "sales"] = target_value
+    dataset = add_dataset_with_frame(db_session, tmp_path, user, dataframe)
+    job = add_analysis_job(
+        db_session,
+        user,
+        dataset,
+        task_type=TaskType.FORECASTING,
+        target_column="sales",
+        config_json={"date_column": "date"},
+    )
+
+    with pytest.raises(HTTPException) as error:
+        run_analysis_job(db_session, job.id, user)
+
+    assert error.value.status_code == 400
+    assert expected_detail in error.value.detail
+
+
+def test_forecasting_rejects_too_few_rows(db_session, tmp_path) -> None:
+    user = add_user(db_session, "forecasting_too_few_rows")
+    dataset = add_dataset_with_frame(
+        db_session,
+        tmp_path,
+        user,
+        valid_forecasting_frame(row_count=29),
+    )
+    job = add_analysis_job(
+        db_session,
+        user,
+        dataset,
+        task_type=TaskType.FORECASTING,
+        target_column="sales",
+        config_json={"date_column": "date"},
+    )
+
+    with pytest.raises(HTTPException) as error:
+        run_analysis_job(db_session, job.id, user)
+
+    assert error.value.status_code == 400
+    assert "at least 30 rows" in error.value.detail
+
+
+def test_forecasting_interpretation_warns_for_weak_metrics() -> None:
+    interpretation = build_forecasting_interpretation(
+        metrics={
+            "mae": 35.0,
+            "rmse": 45.0,
+            "mape": 25.0,
+            "r2_score": 0.25,
+            "target_mean": 100.0,
+            "target_min": 50.0,
+            "target_max": 150.0,
+        },
+        row_count=150,
+        date_range_days=120,
+    )
+
+    warning_codes = {warning["code"] for warning in interpretation["warnings"]}
+
+    assert interpretation["quality_level"] == "weak"
+    assert {"weak_r2", "high_error", "high_mape"} <= warning_codes
+    assert interpretation["metric_explanations"]["mape"] == (
+        "Average percentage forecast error when actual values are non-zero."
+    )
+
+
+def test_forecasting_interpretation_warns_for_small_dataset_and_short_range() -> None:
+    interpretation = build_forecasting_interpretation(
+        metrics={
+            "mae": 5.0,
+            "rmse": 8.0,
+            "mape": 6.0,
+            "r2_score": 0.76,
+            "target_mean": 100.0,
+            "target_min": 50.0,
+            "target_max": 150.0,
+        },
+        row_count=60,
+        date_range_days=20,
+    )
+
+    warning_codes = {warning["code"] for warning in interpretation["warnings"]}
+
+    assert interpretation["quality_level"] == "good"
+    assert warning_codes == {"small_dataset", "short_date_range"}
+
+
+def test_forecasting_interpretation_warns_for_missing_metrics() -> None:
+    interpretation = build_forecasting_interpretation(
+        metrics={
+            "mae": 5.0,
+            "rmse": 8.0,
+            "r2_score": 0.76,
+        },
+        row_count=150,
+        date_range_days=120,
+    )
+
+    warning_codes = {warning["code"] for warning in interpretation["warnings"]}
+
+    assert interpretation["quality_level"] == "weak"
+    assert warning_codes == {"missing_metrics"}
+    assert "missing some metrics" in interpretation["summary"]
 
 
 def test_valid_regression_job_can_run_and_creates_model_result(

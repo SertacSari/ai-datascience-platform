@@ -14,6 +14,7 @@ from app.services.classification_training_service import (
     validate_original_target_was_not_fabricated,
 )
 from app.services.dataset_service import read_stored_dataset_file
+from app.services.forecasting_training_service import build_forecasting_model_result_payload
 from app.services.regression_training_service import build_regression_model_result_payload
 
 
@@ -73,10 +74,16 @@ def run_analysis_job(
 
     task_type = get_enum_value(analysis_job.task_type)
 
-    if task_type not in {TaskType.CLASSIFICATION.value, TaskType.REGRESSION.value}:
+    supported_task_types = {
+        TaskType.CLASSIFICATION.value,
+        TaskType.REGRESSION.value,
+        TaskType.FORECASTING.value,
+    }
+
+    if task_type not in supported_task_types:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only classification and regression jobs can be run in this phase",
+            detail="Only classification, regression, and forecasting jobs can be run in this phase",
         )
 
     current_status = get_enum_value(analysis_job.status)
@@ -109,10 +116,17 @@ def run_analysis_job(
                 target_column=analysis_job.target_column,
             )
         else:
-            model_name, metrics, report_json = build_regression_model_result_payload(
-                df=df,
-                target_column=analysis_job.target_column,
-            )
+            if task_type == TaskType.REGRESSION.value:
+                model_name, metrics, report_json = build_regression_model_result_payload(
+                    df=df,
+                    target_column=analysis_job.target_column,
+                )
+            else:
+                model_name, metrics, report_json = build_forecasting_model_result_payload(
+                    df=df,
+                    target_column=analysis_job.target_column,
+                    config_json=analysis_job.config_json,
+                )
         model_result = save_model_result(
             db=db,
             analysis_job=analysis_job,
@@ -135,7 +149,11 @@ def run_analysis_job(
     except Exception as exc:
         db.rollback()
         mark_job_status(db, analysis_job, JobStatus.FAILED)
-        task_name = "Regression" if task_type == TaskType.REGRESSION.value else "Classification"
+        task_name = {
+            TaskType.CLASSIFICATION.value: "Classification",
+            TaskType.REGRESSION.value: "Regression",
+            TaskType.FORECASTING.value: "Forecasting",
+        }.get(task_type, "Model")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"{task_name} training failed",

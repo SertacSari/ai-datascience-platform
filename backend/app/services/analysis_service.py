@@ -66,45 +66,11 @@ def validate_forecasting_target(
     target_column: str,
     config_json: dict[str, Any],
 ) -> None:
-    if not pd.api.types.is_numeric_dtype(df[target_column]):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Forecasting target column must be numerical",
-        )
+    from app.services.forecasting_training_service import (
+        validate_forecasting_ml_readiness,
+    )
 
-    date_column = (config_json or {}).get("date_column")
-
-    if not isinstance(date_column, str) or not date_column.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Forecasting requires config_json.date_column",
-        )
-
-    if date_column == target_column:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Forecasting date column must be different from target column",
-        )
-
-    if date_column not in df.columns:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Forecasting date column does not exist in dataset",
-        )
-
-    parsed_dates = pd.to_datetime(df[date_column], errors="coerce")
-
-    if parsed_dates.isna().any():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Forecasting date column contains invalid or missing dates",
-        )
-
-    if parsed_dates.duplicated().any():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Forecasting date column must contain unique values",
-        )
+    validate_forecasting_ml_readiness(df, target_column, config_json)
 
 
 def validate_task_specific_rules(
@@ -131,7 +97,11 @@ def validate_task_specific_rules(
         validate_regression_ml_readiness(df, target_column)
 
     elif task_type == "forecasting":
-        validate_forecasting_target(df, target_column, config_json)
+        from app.services.forecasting_training_service import (
+            validate_forecasting_ml_readiness,
+        )
+
+        validate_forecasting_ml_readiness(df, target_column, config_json)
 
 
 def validate_analysis_request(

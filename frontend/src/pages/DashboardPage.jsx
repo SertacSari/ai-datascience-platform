@@ -104,6 +104,11 @@ function formatPercentageMetric(value) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+function formatPercentValue(value) {
+  if (typeof value !== "number") return value ?? "Not available";
+  return `${value.toFixed(1)}%`;
+}
+
 function formatNumberMetric(value) {
   if (typeof value !== "number") return value ?? "Not available";
   return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
@@ -120,6 +125,13 @@ const REGRESSION_METRIC_EXPLANATIONS = {
   mae: "Average absolute prediction error in target units.",
   rmse: "Error metric that penalizes large mistakes more.",
   r2_score: "How much target variation the model explains on the test split."
+};
+
+const FORECASTING_METRIC_EXPLANATIONS = {
+  mae: "Average absolute forecast error in target units.",
+  rmse: "Typical forecast error, with larger mistakes weighted more heavily.",
+  mape: "Average percentage forecast error when actual values are non-zero.",
+  r2_score: "How much target variation the model explains on the held-out time period."
 };
 
 const QUALITY_TONES = {
@@ -206,14 +218,14 @@ function MetricSummaryGrid({ rows }) {
 }
 
 function isRunnableTask(taskType) {
-  return taskType === "classification" || taskType === "regression";
+  return taskType === "classification" || taskType === "regression" || taskType === "forecasting";
 }
 
 function trainingErrorMessage(error) {
   const message = error?.message || "";
 
   if (error?.status === 409 || /Only created jobs can be run/i.test(message)) {
-    return "This job has already been completed. This job cannot be run again from this phase. Refresh jobs and choose a created classification or regression job.";
+    return "This job has already been completed. This job cannot be run again from this phase. Refresh jobs and choose a created model job.";
   }
 
   if (error?.status === 401) {
@@ -462,10 +474,155 @@ function RegressionResultCard({ result }) {
   );
 }
 
+function ForecastingResultCard({ result }) {
+  const modelResult = result?.model_result || result;
+  if (!modelResult) return null;
+
+  const { metrics = {}, report_json: reportJson = {} } = modelResult;
+  const interpretation = reportJson.interpretation || {};
+  const metricExplanations = {
+    ...FORECASTING_METRIC_EXPLANATIONS,
+    ...(interpretation.metric_explanations || {})
+  };
+  const warnings = Array.isArray(interpretation.warnings) ? interpretation.warnings : [];
+  const predictionSample = Array.isArray(reportJson.prediction_sample) ? reportJson.prediction_sample : [];
+  const numericFeatures = Array.isArray(reportJson.numeric_features) ? reportJson.numeric_features : [];
+  const categoricalFeatures = Array.isArray(reportJson.categorical_features) ? reportJson.categorical_features : [];
+  const metricRows = [
+    ["mae", "MAE", formatNumberMetric(metrics.mae), metricExplanations.mae],
+    ["rmse", "RMSE", formatNumberMetric(metrics.rmse), metricExplanations.rmse],
+    ["mape", "MAPE", formatPercentValue(metrics.mape), metricExplanations.mape],
+    ["r2_score", "R² score", formatPercentageMetric(metrics.r2_score), metricExplanations.r2_score]
+  ];
+
+  return (
+    <section className="card model-result-card">
+      <div className="card-head">
+        <div>
+          <p className="eyebrow">Forecasting result</p>
+          <h2>{result?.job?.id ? `Job #${result.job.id} completed` : "Completed job result"}</h2>
+        </div>
+        <Badge tone="ok">{modelNameFromResult(modelResult)}</Badge>
+      </div>
+
+      <ResultInterpretation
+        fallbackSummary="Forecasting training completed. Review the held-out time period and forecast errors before using the result."
+        interpretation={interpretation}
+      />
+
+      <MetricSummaryGrid rows={metricRows} />
+
+      <ResultWarnings warnings={warnings} />
+
+      <div className="result-block">
+        <strong>Forecasting context</strong>
+        <table className="result-table">
+          <tbody>
+            <tr>
+              <th scope="row">Date column</th>
+              <td>{reportJson.date_column || "Not available"}</td>
+            </tr>
+            <tr>
+              <th scope="row">Target column</th>
+              <td>{reportJson.target_column || result?.job?.target_column || "Not available"}</td>
+            </tr>
+            <tr>
+              <th scope="row">Test start date</th>
+              <td>{reportJson.test_start_date || "Not available"}</td>
+            </tr>
+            <tr>
+              <th scope="row">Test end date</th>
+              <td>{reportJson.test_end_date || "Not available"}</td>
+            </tr>
+            <tr>
+              <th scope="row">Model name</th>
+              <td>{modelNameFromResult(modelResult)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div className="result-block">
+        <strong>Target summary</strong>
+        <table className="result-table">
+          <tbody>
+            <tr>
+              <th scope="row">Target mean</th>
+              <td>{formatNumberMetric(metrics.target_mean)}</td>
+            </tr>
+            <tr>
+              <th scope="row">Target min</th>
+              <td>{formatNumberMetric(metrics.target_min)}</td>
+            </tr>
+            <tr>
+              <th scope="row">Target max</th>
+              <td>{formatNumberMetric(metrics.target_max)}</td>
+            </tr>
+            <tr>
+              <th scope="row">Test size</th>
+              <td>{formatPercentageMetric(metrics.test_size)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div className="result-block">
+        <strong>Prediction sample</strong>
+        {predictionSample.length ? (
+          <div className="table-wrap">
+            <table className="result-table prediction-table">
+              <thead>
+                <tr>
+                  <th scope="col">Date</th>
+                  <th scope="col">Actual</th>
+                  <th scope="col">Predicted</th>
+                  <th scope="col">Difference</th>
+                </tr>
+              </thead>
+              <tbody>
+                {predictionSample.map((row, index) => {
+                  const hasDifference = typeof row.actual === "number" && typeof row.predicted === "number";
+                  const difference = hasDifference ? row.predicted - row.actual : null;
+
+                  return (
+                    <tr key={`${row.date || "date"}-${row.actual ?? "actual"}-${row.predicted ?? "predicted"}-${index}`}>
+                      <td>{row.date || "Not available"}</td>
+                      <td>{formatNumberMetric(row.actual)}</td>
+                      <td>{formatNumberMetric(row.predicted)}</td>
+                      <td>{hasDifference ? formatNumberMetric(difference) : "Not available"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="muted">No prediction sample was returned.</p>
+        )}
+      </div>
+
+      <div className="result-block">
+        <strong>Model features</strong>
+        <p className="muted">
+          Numeric: {numericFeatures.length ? numericFeatures.slice(0, 6).join(", ") : "Not available"}
+        </p>
+        <p className="muted">
+          Categorical: {categoricalFeatures.length ? categoricalFeatures.slice(0, 6).join(", ") : "Not available"}
+        </p>
+      </div>
+    </section>
+  );
+}
+
 function ModelResultCard({ result }) {
   if (!result) return null;
   const taskType = result.job?.task_type;
   const modelResult = result.model_result || result;
+  const reportJson = modelResult.report_json || {};
+
+  if (taskType === "forecasting" || "mape" in (modelResult.metrics || {}) || "date_column" in reportJson) {
+    return <ForecastingResultCard result={result} />;
+  }
 
   if (taskType === "regression" || "mae" in (modelResult.metrics || {})) {
     return <RegressionResultCard result={result} />;
@@ -764,11 +921,11 @@ export default function DashboardPage() {
           </form>
           <p className="muted">
             {dataset
-              ? "Create the job first; classification and regression jobs can be run here."
+              ? "Create the job first; classification, regression, and forecasting jobs can be run here."
               : "Upload a dataset to enable backend analysis requests."}
           </p>
           <p className="muted">
-            Classification and regression training are available. Forecasting training comes later.
+            Classification, regression, and forecasting training are available.
           </p>
           {numericColumns.length ? <p className="muted">Numeric columns: {numericColumns.slice(0, 4).join(", ")}</p> : null}
           {jobStatus.message ? <div aria-live="polite" className={`backend-status ${jobStatus.type}`} role="status">{jobStatus.message}</div> : null}
