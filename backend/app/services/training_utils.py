@@ -36,3 +36,16 @@ def get_numeric_metric(metrics: dict[str, Any], metric_name: str) -> float | Non
         return float(value)
 
     return None
+
+
+def build_recommended_actions(
+    warnings: list[dict[str, str]],
+    action_map: dict[str, str],
+) -> list[str]:
+    actions = []
+    for warning in warnings:
+        action = action_map.get(warning["code"])
+        if action and action not in actions:
+            actions.append(action)
+
+    return actions

@@ -7,8 +7,9 @@ import pandas as pd
 from fastapi import HTTPException, status
 
 from app.services.training_utils import (
-    TEST_SIZE,
     RANDOM_STATE,
+    TEST_SIZE,
+    build_recommended_actions,
     ensure_sklearn_dependencies_available,
     get_numeric_metric,
     split_feature_columns,
@@ -29,6 +30,15 @@ FORECASTING_METRIC_EXPLANATIONS = {
     "rmse": "Typical forecast error, with larger mistakes weighted more heavily.",
     "mape": "Average percentage forecast error when actual values are non-zero.",
     "r2_score": "How much target variation the model explains on the held-out time period.",
+}
+
+FORECASTING_RECOMMENDED_ACTIONS = {
+    "weak_r2": "Add more time-related or business-event columns.",
+    "high_error": "Review large forecast misses before using the result.",
+    "high_mape": "Do not use this forecast for important planning yet.",
+    "small_dataset": "Add more historical rows.",
+    "short_date_range": "Use a longer historical date range.",
+    "missing_metrics": "Review the result because some expected metrics are unavailable.",
 }
 
 
@@ -320,6 +330,10 @@ def build_forecasting_interpretation(
         "quality_level": quality_level,
         "warnings": warnings,
         "metric_explanations": FORECASTING_METRIC_EXPLANATIONS,
+        "recommended_actions": build_recommended_actions(
+            warnings,
+            FORECASTING_RECOMMENDED_ACTIONS,
+        ),
     }
 
 

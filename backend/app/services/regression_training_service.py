@@ -9,6 +9,7 @@ from fastapi import HTTPException, status
 from app.services.training_utils import (
     RANDOM_STATE,
     TEST_SIZE,
+    build_recommended_actions,
     ensure_sklearn_dependencies_available,
     get_numeric_metric,
     split_feature_columns,
@@ -26,6 +27,13 @@ REGRESSION_METRIC_EXPLANATIONS = {
     "mae": "Average absolute prediction error in target units.",
     "rmse": "Typical prediction error, with larger mistakes weighted more heavily.",
     "r2_score": "How much target variation the model explains on the test split.",
+}
+
+REGRESSION_RECOMMENDED_ACTIONS = {
+    "weak_r2": "Add stronger explanatory columns or review whether the target is predictable.",
+    "high_error": "Check outliers and whether the target scale is very wide.",
+    "small_dataset": "Add more rows before using this model for decisions.",
+    "missing_metrics": "Review the result because some expected metrics are unavailable.",
 }
 
 
@@ -235,6 +243,10 @@ def build_regression_interpretation(
         "quality_level": quality_level,
         "warnings": warnings,
         "metric_explanations": REGRESSION_METRIC_EXPLANATIONS,
+        "recommended_actions": build_recommended_actions(
+            warnings,
+            REGRESSION_RECOMMENDED_ACTIONS,
+        ),
     }
 
 

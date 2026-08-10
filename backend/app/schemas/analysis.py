@@ -19,6 +19,8 @@ class AnalysisJobResponse(BaseModel):
     id: int
     user_id: int
     dataset_id: int
+    dataset_file_name: str | None = None
+    dataset_source_label: str = "Original uploaded file"
     task_type: TaskType
     target_column: str
     status: JobStatus

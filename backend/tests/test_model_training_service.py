@@ -210,6 +210,7 @@ def test_valid_classification_job_can_run_and_creates_model_result(
         "quality_level",
         "warnings",
         "metric_explanations",
+        "recommended_actions",
     }
     assert "class_distribution" not in model_result.report_json
     assert (
@@ -221,7 +222,37 @@ def test_valid_classification_job_can_run_and_creates_model_result(
 
     response = AnalysisJobRunResponse(job=updated_job, model_result=model_result)
     assert response.job.id == job.id
+    assert response.job.dataset_file_name == dataset.file_name
+    assert response.job.dataset_source_label == "Original uploaded file"
     assert response.model_result.id == model_result.id
+
+
+def test_completed_job_keeps_source_label_after_dataset_is_cleaned(
+    db_session,
+    tmp_path,
+) -> None:
+    user = add_user(db_session, "source_snapshot_owner")
+    dataset = add_dataset_with_frame(
+        db_session,
+        tmp_path,
+        user,
+        valid_classification_frame(),
+    )
+    job = add_analysis_job(db_session, user, dataset)
+
+    updated_job, _ = run_analysis_job(db_session, job.id, user)
+
+    cleaned_path = tmp_path / "cleaned_after_job.csv"
+    valid_classification_frame().to_csv(cleaned_path, index=False)
+    dataset.cleaned_file_path = str(cleaned_path)
+    db_session.commit()
+    db_session.refresh(updated_job)
+
+    response = AnalysisJobRunResponse(
+        job=updated_job,
+        model_result=updated_job.model_result,
+    )
+    assert response.job.dataset_source_label == "Original uploaded file"
 
 
 def test_non_owned_job_cannot_run(db_session, tmp_path) -> None:
@@ -299,6 +330,7 @@ def test_valid_forecasting_job_can_run_and_creates_model_result(
         "quality_level",
         "warnings",
         "metric_explanations",
+        "recommended_actions",
     }
 
 
@@ -531,6 +563,11 @@ def test_forecasting_interpretation_warns_for_weak_metrics() -> None:
 
     assert interpretation["quality_level"] == "weak"
     assert {"weak_r2", "high_error", "high_mape"} <= warning_codes
+    assert interpretation["recommended_actions"] == [
+        "Add more time-related or business-event columns.",
+        "Review large forecast misses before using the result.",
+        "Do not use this forecast for important planning yet.",
+    ]
     assert interpretation["metric_explanations"]["mape"] == (
         "Average percentage forecast error when actual values are non-zero."
     )
@@ -555,6 +592,10 @@ def test_forecasting_interpretation_warns_for_small_dataset_and_short_range() ->
 
     assert interpretation["quality_level"] == "good"
     assert warning_codes == {"small_dataset", "short_date_range"}
+    assert interpretation["recommended_actions"] == [
+        "Add more historical rows.",
+        "Use a longer historical date range.",
+    ]
 
 
 def test_forecasting_interpretation_warns_for_missing_metrics() -> None:
@@ -573,6 +614,9 @@ def test_forecasting_interpretation_warns_for_missing_metrics() -> None:
     assert interpretation["quality_level"] == "weak"
     assert warning_codes == {"missing_metrics"}
     assert "missing some metrics" in interpretation["summary"]
+    assert interpretation["recommended_actions"] == [
+        "Review the result because some expected metrics are unavailable.",
+    ]
 
 
 def test_valid_regression_job_can_run_and_creates_model_result(
@@ -623,6 +667,7 @@ def test_valid_regression_job_can_run_and_creates_model_result(
         "quality_level",
         "warnings",
         "metric_explanations",
+        "recommended_actions",
     }
 
 
@@ -1112,6 +1157,7 @@ def test_classification_interpretation_for_good_result_has_no_metric_warnings() 
     assert interpretation["quality_level"] == "good"
     assert "good classification performance" in interpretation["summary"]
     assert interpretation["warnings"] == []
+    assert interpretation["recommended_actions"] == []
     assert interpretation["metric_explanations"]["accuracy"] == (
         "Overall share of correct predictions."
     )
@@ -1137,6 +1183,12 @@ def test_classification_interpretation_warns_for_weak_metrics() -> None:
         "weak_f1",
         "low_recall",
     }
+    assert interpretation["recommended_actions"] == [
+        "Review the dataset and target column before using predictions.",
+        "Review precision and recall together before trusting this model.",
+        "Check false positives; the model may predict a class too often.",
+        "Check false negatives; the model may miss real cases.",
+    ]
 
 
 def test_classification_interpretation_warns_for_low_precision_only() -> None:
@@ -1154,6 +1206,9 @@ def test_classification_interpretation_warns_for_low_precision_only() -> None:
 
     assert interpretation["quality_level"] == "fair"
     assert warning_codes == {"low_precision"}
+    assert interpretation["recommended_actions"] == [
+        "Check false positives; the model may predict a class too often.",
+    ]
 
 
 def test_classification_interpretation_warns_for_class_imbalance() -> None:
@@ -1171,6 +1226,9 @@ def test_classification_interpretation_warns_for_class_imbalance() -> None:
 
     assert interpretation["quality_level"] == "good"
     assert "class_imbalance" in warning_codes
+    assert "Collect more examples for minority classes." in interpretation[
+        "recommended_actions"
+    ]
 
 
 def test_classification_interpretation_warns_for_missing_metrics() -> None:
@@ -1188,6 +1246,9 @@ def test_classification_interpretation_warns_for_missing_metrics() -> None:
     assert interpretation["quality_level"] == "weak"
     assert warning_codes == {"missing_metrics"}
     assert "missing some metrics" in interpretation["summary"]
+    assert interpretation["recommended_actions"] == [
+        "Review the result because some expected metrics are unavailable.",
+    ]
 
 
 def test_regression_interpretation_warns_for_weak_r2_and_high_error() -> None:
@@ -1207,6 +1268,10 @@ def test_regression_interpretation_warns_for_weak_r2_and_high_error() -> None:
 
     assert interpretation["quality_level"] == "weak"
     assert {"weak_r2", "high_error"} <= warning_codes
+    assert interpretation["recommended_actions"] == [
+        "Add stronger explanatory columns or review whether the target is predictable.",
+        "Check outliers and whether the target scale is very wide.",
+    ]
     assert interpretation["metric_explanations"]["rmse"] == (
         "Typical prediction error, with larger mistakes weighted more heavily."
     )
@@ -1229,6 +1294,9 @@ def test_regression_interpretation_warns_for_small_dataset() -> None:
 
     assert interpretation["quality_level"] == "good"
     assert warning_codes == {"small_dataset"}
+    assert interpretation["recommended_actions"] == [
+        "Add more rows before using this model for decisions.",
+    ]
 
 
 def test_regression_interpretation_warns_for_missing_metrics() -> None:
@@ -1246,3 +1314,6 @@ def test_regression_interpretation_warns_for_missing_metrics() -> None:
     assert interpretation["quality_level"] == "weak"
     assert warning_codes == {"missing_metrics"}
     assert "missing some metrics" in interpretation["summary"]
+    assert interpretation["recommended_actions"] == [
+        "Review the result because some expected metrics are unavailable.",
+    ]

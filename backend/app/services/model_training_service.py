@@ -4,7 +4,11 @@ from pathlib import Path
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.models.analysis_job import AnalysisJob
+from app.models.analysis_job import (
+    DATASET_SOURCE_LABEL_CONFIG_KEY,
+    AnalysisJob,
+    get_current_dataset_source_label,
+)
 from app.models.enums import JobStatus, TaskType
 from app.models.model_result import ModelResult
 from app.models.user import User
@@ -97,6 +101,7 @@ def run_analysis_job(
     mark_job_status(db, analysis_job, JobStatus.RUNNING)
 
     try:
+        dataset_source_label = get_current_dataset_source_label(analysis_job.dataset)
         dataset_path = get_dataset_path_for_analysis(analysis_job.dataset)
 
         if not Path(dataset_path).is_file():
@@ -134,6 +139,15 @@ def run_analysis_job(
             metrics=metrics,
             report_json=report_json,
         )
+        config_json = (
+            analysis_job.config_json
+            if isinstance(analysis_job.config_json, dict)
+            else {}
+        )
+        analysis_job.config_json = {
+            **config_json,
+            DATASET_SOURCE_LABEL_CONFIG_KEY: dataset_source_label,
+        }
         analysis_job.status = JobStatus.COMPLETED
         analysis_job.finished_at = datetime.utcnow()
         db.commit()

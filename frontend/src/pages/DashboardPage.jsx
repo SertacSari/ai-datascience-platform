@@ -203,6 +203,36 @@ function ResultWarnings({ warnings }) {
   );
 }
 
+function recommendedActionText(action) {
+  if (typeof action === "string") return action;
+  if (action && typeof action === "object") {
+    return action.message || action.code || "Review this model result before using it.";
+  }
+  return "Review this model result before using it.";
+}
+
+function ResultRecommendedActions({ actions }) {
+  const safeActions = Array.isArray(actions) ? actions : [];
+
+  return (
+    <div className={`result-warning-panel ${safeActions.length ? "has-warnings" : "clear"}`}>
+      <strong>Recommended actions</strong>
+      {safeActions.length ? (
+        <ul>
+          {safeActions.map((action, index) => (
+            <li key={`${recommendedActionText(action)}-${index}`}>
+              <Badge>Action</Badge>
+              <span>{recommendedActionText(action)}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p>No extra actions were recommended.</p>
+      )}
+    </div>
+  );
+}
+
 function MetricSummaryGrid({ rows }) {
   return (
     <div className={`metric-summary-grid count-${rows.length}`}>
@@ -246,6 +276,9 @@ function ClassificationResultCard({ result }) {
     ...(interpretation.metric_explanations || {})
   };
   const warnings = Array.isArray(interpretation.warnings) ? interpretation.warnings : [];
+  const recommendedActions = Array.isArray(interpretation.recommended_actions)
+    ? interpretation.recommended_actions
+    : [];
   const classDistribution = metrics.class_distribution || {};
   const confusionMatrix = Array.isArray(reportJson.confusion_matrix) ? reportJson.confusion_matrix : [];
   const classificationReport = reportJson.classification_report || {};
@@ -283,6 +316,8 @@ function ClassificationResultCard({ result }) {
       />
 
       <ResultWarnings warnings={warnings} />
+
+      <ResultRecommendedActions actions={recommendedActions} />
 
       <div className="result-block">
         <strong>Class distribution</strong>
@@ -376,6 +411,9 @@ function RegressionResultCard({ result }) {
     ...(interpretation.metric_explanations || {})
   };
   const warnings = Array.isArray(interpretation.warnings) ? interpretation.warnings : [];
+  const recommendedActions = Array.isArray(interpretation.recommended_actions)
+    ? interpretation.recommended_actions
+    : [];
   const predictionSample = Array.isArray(reportJson.prediction_sample) ? reportJson.prediction_sample : [];
   const numericFeatures = Array.isArray(reportJson.numeric_features) ? reportJson.numeric_features : [];
   const categoricalFeatures = Array.isArray(reportJson.categorical_features) ? reportJson.categorical_features : [];
@@ -403,6 +441,8 @@ function RegressionResultCard({ result }) {
       <MetricSummaryGrid rows={metricRows} />
 
       <ResultWarnings warnings={warnings} />
+
+      <ResultRecommendedActions actions={recommendedActions} />
 
       <div className="result-block">
         <strong>Target summary</strong>
@@ -485,6 +525,9 @@ function ForecastingResultCard({ result }) {
     ...(interpretation.metric_explanations || {})
   };
   const warnings = Array.isArray(interpretation.warnings) ? interpretation.warnings : [];
+  const recommendedActions = Array.isArray(interpretation.recommended_actions)
+    ? interpretation.recommended_actions
+    : [];
   const predictionSample = Array.isArray(reportJson.prediction_sample) ? reportJson.prediction_sample : [];
   const numericFeatures = Array.isArray(reportJson.numeric_features) ? reportJson.numeric_features : [];
   const categoricalFeatures = Array.isArray(reportJson.categorical_features) ? reportJson.categorical_features : [];
@@ -513,6 +556,8 @@ function ForecastingResultCard({ result }) {
       <MetricSummaryGrid rows={metricRows} />
 
       <ResultWarnings warnings={warnings} />
+
+      <ResultRecommendedActions actions={recommendedActions} />
 
       <div className="result-block">
         <strong>Forecasting context</strong>
@@ -629,6 +674,23 @@ function ModelResultCard({ result }) {
   }
 
   return <ClassificationResultCard result={result} />;
+}
+
+function AnalysisDatasetSource({ cleanResult, dataset }) {
+  if (!dataset) return null;
+
+  return (
+    <div className="result-warning-panel clear">
+      <strong>Dataset used for analysis</strong>
+      <p>{dataset.file_name || "Uploaded dataset"}</p>
+      <p>Source: {cleanResult ? "Cleaned dataset" : "Original uploaded file"}</p>
+      <p>
+        {cleanResult
+          ? "Future analysis jobs will use the cleaned version."
+          : "If you clean the dataset, future analysis jobs will use the cleaned version."}
+      </p>
+    </div>
+  );
 }
 
 export default function DashboardPage() {
@@ -859,6 +921,7 @@ export default function DashboardPage() {
             </div>
             <Badge tone={jobs.length ? "ok" : "neutral"}>{jobs.length} jobs</Badge>
           </div>
+          <AnalysisDatasetSource cleanResult={cleanResult} dataset={dataset} />
           <form className="analysis-form" onSubmit={handleCreateJob}>
             <label>
               <span>Analysis type</span>
@@ -933,9 +996,13 @@ export default function DashboardPage() {
           {jobs.length ? (
             <div className="job-list">
               {jobs.slice(0, 4).map((job) => (
-                <div key={job.id}>
-                  <strong>#{job.id} {job.task_type}</strong>
-                  <span>{job.target_column}</span>
+                <div className="job-row" key={job.id}>
+                  <span className="job-details">
+                    <strong>#{job.id} {job.task_type}</strong>
+                    <small className="job-file">{job.dataset_file_name || "Uploaded dataset"}</small>
+                    <small className="job-target">Target: {job.target_column}</small>
+                    <small className="job-source">Source: {job.dataset_source_label || "Original uploaded file"}</small>
+                  </span>
                   <Badge tone={job.status === "failed" ? "err" : job.status === "completed" ? "ok" : "warn"}>{job.status}</Badge>
                   {isRunnableTask(job.task_type) && job.status === "created" ? (
                     <button

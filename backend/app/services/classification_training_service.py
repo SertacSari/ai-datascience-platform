@@ -11,6 +11,7 @@ from app.services.dataset_service import read_stored_dataset_file
 from app.services.training_utils import (
     RANDOM_STATE,
     TEST_SIZE,
+    build_recommended_actions,
     ensure_sklearn_dependencies_available,
     get_numeric_metric,
     split_feature_columns,
@@ -36,6 +37,17 @@ METRIC_EXPLANATIONS = {
     "recall": "How many real cases of a class the model catches.",
     "f1_score": "Balance between precision and recall.",
 }
+
+CLASSIFICATION_RECOMMENDED_ACTIONS = {
+    "low_accuracy": "Review the dataset and target column before using predictions.",
+    "low_precision": "Check false positives; the model may predict a class too often.",
+    "weak_f1": "Review precision and recall together before trusting this model.",
+    "low_recall": "Check false negatives; the model may miss real cases.",
+    "class_imbalance": "Collect more examples for minority classes.",
+    "small_dataset": "Add more rows before trusting the result.",
+    "missing_metrics": "Review the result because some expected metrics are unavailable.",
+}
+
 
 def reject_bad_classification_data(message: str) -> None:
     raise HTTPException(
@@ -416,6 +428,10 @@ def build_classification_interpretation(
         "quality_level": quality_level,
         "warnings": warnings,
         "metric_explanations": METRIC_EXPLANATIONS,
+        "recommended_actions": build_recommended_actions(
+            warnings,
+            CLASSIFICATION_RECOMMENDED_ACTIONS,
+        ),
     }
 
 

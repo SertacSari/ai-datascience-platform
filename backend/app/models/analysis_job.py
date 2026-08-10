@@ -18,8 +18,20 @@ from app.database import Base
 from app.models.enums import JobStatus, TaskType
 
 
+DATASET_SOURCE_LABEL_CONFIG_KEY = "_analysis_dataset_source_label"
+CLEANED_DATASET_SOURCE_LABEL = "Cleaned dataset"
+ORIGINAL_DATASET_SOURCE_LABEL = "Original uploaded file"
+
+
 def enum_values(enum_class):
     return [member.value for member in enum_class]
+
+
+def get_current_dataset_source_label(dataset) -> str:
+    if dataset is not None and dataset.cleaned_file_path:
+        return CLEANED_DATASET_SOURCE_LABEL
+
+    return ORIGINAL_DATASET_SOURCE_LABEL
 
 
 class AnalysisJob(Base):
@@ -84,3 +96,23 @@ class AnalysisJob(Base):
         back_populates="analysis_job",
         uselist=False,
     )
+
+    @property
+    def dataset_file_name(self) -> str | None:
+        if self.dataset is None:
+            return None
+
+        return self.dataset.file_name
+
+    @property
+    def dataset_source_label(self) -> str:
+        config_json = self.config_json if isinstance(self.config_json, dict) else {}
+        source_label = config_json.get(DATASET_SOURCE_LABEL_CONFIG_KEY)
+
+        if source_label in {
+            CLEANED_DATASET_SOURCE_LABEL,
+            ORIGINAL_DATASET_SOURCE_LABEL,
+        }:
+            return source_label
+
+        return get_current_dataset_source_label(self.dataset)
