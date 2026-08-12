@@ -13,3 +13,4 @@ openpyxl
 xlrd
 pydantic
 scikit-learn
+httpx

@@ -8,11 +8,13 @@ from app.dependencies import get_current_user
 from app.models.analysis_job import AnalysisJob
 from app.models.user import User
 from app.schemas.analysis import (
+    AIExplanationResponse,
     AnalysisJobCreate,
     AnalysisJobResponse,
     AnalysisJobRunResponse,
     ModelResultResponse,
 )
+from app.services.ai_service import create_ai_explanation, get_ai_explanation
 from app.services.analysis_service import (
     create_analysis_job,
     get_analysis_job,
@@ -112,6 +114,38 @@ def get_analysis_job_result_endpoint(
     current_user: User = Depends(get_current_user),
 ):
     return get_analysis_job_result(
+        db=db,
+        job_id=job_id,
+        current_user=current_user,
+    )
+
+
+@router.post(
+    "/jobs/{job_id}/ai-explanation",
+    response_model=AIExplanationResponse,
+)
+def create_ai_explanation_endpoint(
+    job_id: Annotated[int, Path(gt=0)],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> AIExplanationResponse:
+    return create_ai_explanation(
+        db=db,
+        job_id=job_id,
+        current_user=current_user,
+    )
+
+
+@router.get(
+    "/jobs/{job_id}/ai-explanation",
+    response_model=AIExplanationResponse,
+)
+def get_ai_explanation_endpoint(
+    job_id: Annotated[int, Path(gt=0)],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> AIExplanationResponse:
+    return get_ai_explanation(
         db=db,
         job_id=job_id,
         current_user=current_user,

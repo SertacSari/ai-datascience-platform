@@ -43,3 +43,13 @@ class ModelResultResponse(BaseModel):
 class AnalysisJobRunResponse(BaseModel):
     job: AnalysisJobResponse
     model_result: ModelResultResponse
+
+
+class AIExplanationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    analysis_id: int
+    llm_model: str
+    explanation_text: str
+    created_at: datetime

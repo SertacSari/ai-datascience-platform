@@ -65,3 +65,10 @@ AUTH_COOKIE_SECURE = get_bool_setting("AUTH_COOKIE_SECURE", False)
 UPLOAD_DIR = get_upload_dir()
 MAX_UPLOAD_SIZE_MB = get_int_setting("MAX_UPLOAD_SIZE_MB", 50)
 MAX_DATAFRAME_MEMORY_MB = get_int_setting("MAX_DATAFRAME_MEMORY_MB", 200)
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma3:4b")
+AI_EXPLANATION_ENABLED = get_bool_setting("AI_EXPLANATION_ENABLED", False)
+AI_EXPLANATION_TIMEOUT_SECONDS = get_int_setting(
+    "AI_EXPLANATION_TIMEOUT_SECONDS",
+    30,
+)

@@ -1243,6 +1243,11 @@ small {
   background: var(--primary-tint);
 }
 
+.llm-model-badge {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
 .empty-cell {
   height: 160px;
   text-align: center !important;

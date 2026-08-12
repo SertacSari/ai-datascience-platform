@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import {
   cleanDataset,
   createAnalysisJob,
+  generateAiExplanation,
+  getAiExplanation,
   getCleaningReport,
   getDatasetPreview,
   getAnalysisJobResult,
@@ -265,7 +267,47 @@ function trainingErrorMessage(error) {
   return message || "Training failed. Check that the dataset and target column are suitable for this model type.";
 }
 
-function ClassificationResultCard({ result }) {
+function aiExplanationErrorMessage(error) {
+  if (error?.status === 503) {
+    return "AI explanation is currently unavailable. The rule-based summary is still available.";
+  }
+
+  if (error?.status === 401) {
+    return "Your session expired. Please log in again.";
+  }
+
+  return error?.message || "Could not load the local AI explanation.";
+}
+
+function LocalAiExplanationSection({ aiExplanationState, jobId, onGenerate }) {
+  if (!jobId) return null;
+
+  const isCurrentJob = aiExplanationState?.jobId === jobId;
+  const status = isCurrentJob ? aiExplanationState.status : "idle";
+  const explanation = isCurrentJob ? aiExplanationState.explanation : null;
+  const message = isCurrentJob ? aiExplanationState.message : "";
+  const isLoading = status === "loading";
+
+  return (
+    <div className={`result-warning-panel ${status === "error" ? "has-warnings" : "clear"}`}>
+      <div className="result-interpretation-head">
+        <strong>Local AI explanation</strong>
+        <span className="badge neutral llm-model-badge">{explanation?.llm_model || "Optional"}</span>
+      </div>
+      <p>This optional explanation is generated locally from the saved model result.</p>
+      {explanation?.explanation_text ? (
+        <p>{explanation.explanation_text}</p>
+      ) : (
+        <button className="button sm" disabled={isLoading} onClick={() => onGenerate(jobId)} type="button">
+          {isLoading ? "Working..." : "Generate explanation"}
+        </button>
+      )}
+      {message ? <p>{message}</p> : null}
+    </div>
+  );
+}
+
+function ClassificationResultCard({ aiExplanationState, onGenerateAiExplanation, result }) {
   const modelResult = result?.model_result || result;
   if (!modelResult) return null;
 
@@ -318,6 +360,12 @@ function ClassificationResultCard({ result }) {
       <ResultWarnings warnings={warnings} />
 
       <ResultRecommendedActions actions={recommendedActions} />
+
+      <LocalAiExplanationSection
+        aiExplanationState={aiExplanationState}
+        jobId={result?.job?.id}
+        onGenerate={onGenerateAiExplanation}
+      />
 
       <div className="result-block">
         <strong>Class distribution</strong>
@@ -400,7 +448,7 @@ function ClassificationResultCard({ result }) {
   );
 }
 
-function RegressionResultCard({ result }) {
+function RegressionResultCard({ aiExplanationState, onGenerateAiExplanation, result }) {
   const modelResult = result?.model_result || result;
   if (!modelResult) return null;
 
@@ -443,6 +491,12 @@ function RegressionResultCard({ result }) {
       <ResultWarnings warnings={warnings} />
 
       <ResultRecommendedActions actions={recommendedActions} />
+
+      <LocalAiExplanationSection
+        aiExplanationState={aiExplanationState}
+        jobId={result?.job?.id}
+        onGenerate={onGenerateAiExplanation}
+      />
 
       <div className="result-block">
         <strong>Target summary</strong>
@@ -514,7 +568,7 @@ function RegressionResultCard({ result }) {
   );
 }
 
-function ForecastingResultCard({ result }) {
+function ForecastingResultCard({ aiExplanationState, onGenerateAiExplanation, result }) {
   const modelResult = result?.model_result || result;
   if (!modelResult) return null;
 
@@ -558,6 +612,12 @@ function ForecastingResultCard({ result }) {
       <ResultWarnings warnings={warnings} />
 
       <ResultRecommendedActions actions={recommendedActions} />
+
+      <LocalAiExplanationSection
+        aiExplanationState={aiExplanationState}
+        jobId={result?.job?.id}
+        onGenerate={onGenerateAiExplanation}
+      />
 
       <div className="result-block">
         <strong>Forecasting context</strong>
@@ -659,21 +719,39 @@ function ForecastingResultCard({ result }) {
   );
 }
 
-function ModelResultCard({ result }) {
+function ModelResultCard({ aiExplanationState, onGenerateAiExplanation, result }) {
   if (!result) return null;
   const taskType = result.job?.task_type;
   const modelResult = result.model_result || result;
   const reportJson = modelResult.report_json || {};
 
   if (taskType === "forecasting" || "mape" in (modelResult.metrics || {}) || "date_column" in reportJson) {
-    return <ForecastingResultCard result={result} />;
+    return (
+      <ForecastingResultCard
+        aiExplanationState={aiExplanationState}
+        onGenerateAiExplanation={onGenerateAiExplanation}
+        result={result}
+      />
+    );
   }
 
   if (taskType === "regression" || "mae" in (modelResult.metrics || {})) {
-    return <RegressionResultCard result={result} />;
+    return (
+      <RegressionResultCard
+        aiExplanationState={aiExplanationState}
+        onGenerateAiExplanation={onGenerateAiExplanation}
+        result={result}
+      />
+    );
   }
 
-  return <ClassificationResultCard result={result} />;
+  return (
+    <ClassificationResultCard
+      aiExplanationState={aiExplanationState}
+      onGenerateAiExplanation={onGenerateAiExplanation}
+      result={result}
+    />
+  );
 }
 
 function AnalysisDatasetSource({ cleanResult, dataset }) {
@@ -707,6 +785,12 @@ export default function DashboardPage() {
   const [jobStatus, setJobStatus] = useState({ type: "idle", message: "" });
   const [runStatus, setRunStatus] = useState({ jobId: null, type: "idle", message: "" });
   const [modelResult, setModelResult] = useState(null);
+  const [aiExplanationState, setAiExplanationState] = useState({
+    explanation: null,
+    jobId: null,
+    message: "",
+    status: "idle"
+  });
   const { cleanResult, cleaning, dataset, preview } = dashboardData;
   const stats = dashboardStats(dataset, cleaning, jobs);
   const technical = technicalFromBackend(cleaning, preview);
@@ -809,6 +893,7 @@ export default function DashboardPage() {
   async function handleRunJob(job) {
     setRunStatus({ jobId: job.id, type: "loading", message: `Running ${job.task_type} job #${job.id}...` });
     setModelResult(null);
+    setAiExplanationState({ explanation: null, jobId: job.id, message: "", status: "idle" });
     try {
       const result = await runAnalysisJob(job.id);
       const nextJobs = await listAnalysisJobs();
@@ -832,6 +917,12 @@ export default function DashboardPage() {
 
   async function handleViewResult(job) {
     setRunStatus({ jobId: job.id, type: "loading", message: `Loading saved result for job #${job.id}...` });
+    setAiExplanationState({
+      explanation: null,
+      jobId: job.id,
+      message: "Checking for saved local AI explanation...",
+      status: "loading"
+    });
     try {
       const savedModelResult = await getAnalysisJobResult(job.id);
       setModelResult({ job, model_result: savedModelResult });
@@ -840,12 +931,56 @@ export default function DashboardPage() {
         type: "success",
         message: `Loaded saved ${job.task_type} result for job #${job.id}.`
       });
+
+      try {
+        const cachedExplanation = await getAiExplanation(job.id);
+        setAiExplanationState({
+          explanation: cachedExplanation,
+          jobId: job.id,
+          message: "Loaded saved local AI explanation.",
+          status: "success"
+        });
+      } catch (error) {
+        setAiExplanationState({
+          explanation: null,
+          jobId: job.id,
+          message: error.status === 404 ? "" : aiExplanationErrorMessage(error),
+          status: error.status === 404 ? "idle" : "error"
+        });
+      }
     } catch (error) {
+      setAiExplanationState({ explanation: null, jobId: job.id, message: "", status: "idle" });
       setRunStatus({
         jobId: job.id,
         type: "error",
         message: error.message || "Could not load the saved result for this job."
       });
+    }
+  }
+
+  async function handleGenerateAiExplanation(jobId) {
+    setAiExplanationState((current) => ({
+      explanation: current.jobId === jobId ? current.explanation : null,
+      jobId,
+      message: "Generating local AI explanation...",
+      status: "loading"
+    }));
+
+    try {
+      const explanation = await generateAiExplanation(jobId);
+      setAiExplanationState({
+        explanation,
+        jobId,
+        message: "Local AI explanation generated.",
+        status: "success"
+      });
+    } catch (error) {
+      setAiExplanationState((current) => ({
+        explanation: current.jobId === jobId ? current.explanation : null,
+        jobId,
+        message: aiExplanationErrorMessage(error),
+        status: "error"
+      }));
     }
   }
 
@@ -1030,7 +1165,11 @@ export default function DashboardPage() {
           ) : null}
         </section>
 
-        <ModelResultCard result={modelResult} />
+        <ModelResultCard
+          aiExplanationState={aiExplanationState}
+          onGenerateAiExplanation={handleGenerateAiExplanation}
+          result={modelResult}
+        />
         <DatasetPreviewCard dataset={dataset} preview={preview} />
       </section>
     </main>
