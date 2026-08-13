@@ -1006,8 +1006,11 @@ small {
 }
 
 .recommendation-summary span,
+.target-explanation-panel > strong,
+.target-explanation-grid span,
 .recommendation-detail-grid strong,
-.recommendation-alternatives strong {
+.recommendation-alternatives strong,
+.column-guidance-list > strong {
   color: var(--muted);
   font-size: 10px;
   font-weight: 900;
@@ -1017,6 +1020,88 @@ small {
 
 .recommendation-summary strong {
   min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.target-explanation-panel {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 9px;
+  background: var(--card);
+}
+
+.target-explanation-panel p {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.target-explanation-grid,
+.column-guidance-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.target-explanation-grid div,
+.column-guidance-list {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.target-explanation-grid ul,
+.column-guidance-list ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.target-explanation-grid li,
+.column-guidance-list li {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.column-guidance-grid {
+  align-items: start;
+}
+
+.column-guidance-list {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 9px;
+  background: var(--card);
+}
+
+.column-guidance-list.quiet {
+  background: color-mix(in srgb, var(--card) 72%, var(--bg));
+}
+
+.column-guidance-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+}
+
+.column-guidance-list b {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.column-guidance-list small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
   overflow-wrap: anywhere;
 }
 
@@ -1703,7 +1788,9 @@ small {
   .insight-split,
   .numeric-summary-list div,
   .recommendation-summary,
-  .recommendation-detail-grid {
+  .target-explanation-grid,
+  .recommendation-detail-grid,
+  .column-guidance-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1750,6 +1837,10 @@ small {
   .job-row {
     grid-template-columns: 1fr;
     align-items: stretch;
+  }
+
+  .column-guidance-list li {
+    grid-template-columns: 1fr;
   }
 
   .job-list .button {

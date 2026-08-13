@@ -132,6 +132,25 @@ function healthTone(score) {
   return "err";
 }
 
+function severityTone(severity) {
+  if (severity === "high") return "err";
+  if (severity === "medium") return "warn";
+  if (severity === "low") return "neutral";
+  return "neutral";
+}
+
+function formatRoleLabel(role) {
+  if (!role) return "Column";
+  return role
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function compactGuidanceItems(items, limit) {
+  return Array.isArray(items) ? items.slice(0, limit) : [];
+}
+
 function dashboardStats(dataset, cleaning, jobs) {
   if (!dataset) return statRows;
 
@@ -1067,6 +1086,67 @@ function AnalysisDatasetSource({ cleanResult, dataset }) {
   );
 }
 
+function RecommendationTargetExplanation({ explanation, recommendedTarget }) {
+  const strengths = Array.isArray(explanation?.strengths) ? explanation.strengths : [];
+  const risks = Array.isArray(explanation?.risks) ? explanation.risks : [];
+
+  return (
+    <div className="target-explanation-panel">
+      <strong>Why this target</strong>
+      <p>{explanation?.message || `${recommendedTarget || "The selected target"} is the recommended target for this setup.`}</p>
+      <div className="target-explanation-grid">
+        <div>
+          <span>Strengths</span>
+          {strengths.length ? (
+            <ul>
+              {strengths.slice(0, 3).map((strength, index) => (
+                <li key={`${strength}-${index}`}>{strength}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted">No target strengths were returned.</p>
+          )}
+        </div>
+        <div>
+          <span>Risks</span>
+          {risks.length ? (
+            <ul>
+              {risks.slice(0, 3).map((risk, index) => (
+                <li key={`${risk}-${index}`}>{risk}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted">No major target risks were found.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RecommendationGuidanceList({ emptyText, items, quiet = false, title }) {
+  return (
+    <div className={`column-guidance-list ${quiet ? "quiet" : ""}`}>
+      <strong>{title}</strong>
+      {items.length ? (
+        <ul>
+          {items.map((item, index) => (
+            <li key={`${item.column || item.role || "column"}-${index}`}>
+              <span>
+                <b title={item.column}>{item.column || "Column"}</b>
+                <small>{item.message || "Review this column before creating the analysis job."}</small>
+              </span>
+              <Badge tone={severityTone(item.severity)}>{formatRoleLabel(item.role)}</Badge>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="muted">{emptyText}</p>
+      )}
+    </div>
+  );
+}
+
 function AnalysisRecommendationCard({ onUseRecommendation, recommendationState }) {
   const { message, recommendation, status } = recommendationState;
   if (status === "idle" && !recommendation) return null;
@@ -1074,6 +1154,23 @@ function AnalysisRecommendationCard({ onUseRecommendation, recommendationState }
   const reasons = Array.isArray(recommendation?.reasons) ? recommendation.reasons : [];
   const warnings = Array.isArray(recommendation?.warnings) ? recommendation.warnings : [];
   const alternatives = Array.isArray(recommendation?.alternatives) ? recommendation.alternatives : [];
+  const columnGuidance = Array.isArray(recommendation?.column_guidance) ? recommendation.column_guidance : [];
+  const columnCautions = compactGuidanceItems(
+    columnGuidance.filter((item) => ["high", "medium"].includes(item.severity) && ![
+      "recommended_target",
+      "useful_feature",
+      "possible_date_column"
+    ].includes(item.role)),
+    4
+  );
+  const usefulFeatures = compactGuidanceItems(
+    columnGuidance.filter((item) => item.role === "useful_feature"),
+    4
+  );
+  const dateCandidates = compactGuidanceItems(
+    columnGuidance.filter((item) => item.role === "possible_date_column"),
+    2
+  );
   const hasRecommendation = Boolean(recommendation);
   const confidence = recommendation?.confidence || "manual";
   const healthScore = recommendation?.health_score;
@@ -1116,6 +1213,11 @@ function AnalysisRecommendationCard({ onUseRecommendation, recommendationState }
             </div>
           </div>
 
+          <RecommendationTargetExplanation
+            explanation={recommendation.target_explanation}
+            recommendedTarget={recommendation.recommended_target_column}
+          />
+
           <button className="button sm" onClick={onUseRecommendation} type="button">
             Use recommendation
           </button>
@@ -1145,6 +1247,28 @@ function AnalysisRecommendationCard({ onUseRecommendation, recommendationState }
                 <p className="muted">No setup warnings were returned.</p>
               )}
             </div>
+          </div>
+
+          <div className="column-guidance-grid">
+            <RecommendationGuidanceList
+              emptyText="No major column cautions were returned."
+              items={columnCautions}
+              title="Column cautions"
+            />
+            <RecommendationGuidanceList
+              emptyText="No useful feature guidance was returned."
+              items={usefulFeatures}
+              quiet
+              title="Useful features"
+            />
+            {recommendation.recommended_task_type === "forecasting" || dateCandidates.length ? (
+              <RecommendationGuidanceList
+                emptyText="No date candidates were returned."
+                items={dateCandidates}
+                quiet
+                title="Date candidates"
+              />
+            ) : null}
           </div>
 
           {alternatives.length ? (

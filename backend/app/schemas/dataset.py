@@ -67,6 +67,26 @@ class AnalysisRecommendationAlternative(BaseModel):
     reason: str
 
 
+class TargetExplanation(BaseModel):
+    column: str
+    message: str
+    strengths: list[str]
+    risks: list[str]
+
+
+class ColumnGuidance(BaseModel):
+    column: str
+    role: Literal[
+        "recommended_target",
+        "useful_feature",
+        "possible_target",
+        "not_recommended_target",
+        "possible_date_column",
+    ]
+    severity: Literal["low", "medium", "high"]
+    message: str
+
+
 class AnalysisRecommendationResponse(BaseModel):
     dataset_id: int
     recommended_task_type: Literal["classification", "regression", "forecasting"]
@@ -77,3 +97,5 @@ class AnalysisRecommendationResponse(BaseModel):
     reasons: list[str]
     warnings: list[str]
     alternatives: list[AnalysisRecommendationAlternative]
+    target_explanation: TargetExplanation
+    column_guidance: list[ColumnGuidance]

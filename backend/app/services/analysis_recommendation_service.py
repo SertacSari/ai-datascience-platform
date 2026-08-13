@@ -12,6 +12,8 @@ from app.models.user import User
 from app.schemas.dataset import (
     AnalysisRecommendationAlternative,
     AnalysisRecommendationResponse,
+    ColumnGuidance,
+    TargetExplanation,
 )
 from app.services.dataset_service import get_owned_dataset, read_stored_dataset_file
 
@@ -33,6 +35,18 @@ ID_LIKE_NAMES = {
     "zip",
     "postal",
     "postal_code",
+}
+POSTAL_CODE_NAMES = {"zip", "postal", "postal_code", "area_code"}
+FEATURE_LIKE_NUMERIC_HINTS = {
+    "living_area_sqft",
+    "size_sqft",
+    "store_traffic",
+    "temperature",
+    "bedrooms",
+    "age",
+    "income",
+    "traffic",
+    "area",
 }
 DATE_NAME_HINTS = {"date", "datetime", "timestamp", "time", "day"}
 FORECASTING_TARGET_HINTS = {
@@ -129,6 +143,12 @@ def is_id_like_name(normalized_name: str) -> bool:
         normalized_name.endswith("_id")
         or normalized_name.endswith("_uuid")
         or normalized_name.endswith("_code")
+    )
+
+
+def is_postal_code_like_name(normalized_name: str) -> bool:
+    return normalized_name in POSTAL_CODE_NAMES or bool(
+        set(normalized_name.split("_")) & POSTAL_CODE_NAMES
     )
 
 
@@ -380,11 +400,270 @@ def choose_recommendation(
     )[0]
 
 
+def get_name_tokens(normalized_name: str) -> set[str]:
+    return {token for token in normalized_name.split("_") if token}
+
+
+def get_leakage_root(token: str) -> str:
+    if token.endswith("ed") and len(token) > 3:
+        return token[:-2]
+
+    return token
+
+
+def is_leakage_like_column(profile: ColumnProfile, recommendation: Candidate) -> bool:
+    if not recommendation.target_column or profile.name == recommendation.target_column:
+        return False
+
+    target_name = normalize_name(recommendation.target_column)
+    column_name = profile.normalized_name
+
+    if target_name in column_name or column_name in target_name:
+        return True
+
+    target_tokens = get_name_tokens(target_name)
+    column_tokens = get_name_tokens(column_name)
+    target_roots = {get_leakage_root(token) for token in target_tokens}
+
+    return bool(target_roots & column_tokens)
+
+
+def has_target_name_hint(profile: ColumnProfile) -> bool:
+    return (
+        has_name_hint(profile.normalized_name, REGRESSION_TARGET_HINTS)
+        or has_name_hint(profile.normalized_name, CLASSIFICATION_TARGET_HINTS)
+        or has_name_hint(profile.normalized_name, FORECASTING_TARGET_HINTS)
+    )
+
+
+def get_column_strengths(
+    profile: ColumnProfile,
+    recommendation: Candidate,
+) -> list[str]:
+    strengths = []
+
+    if profile.is_numeric:
+        strengths.append("Numeric column")
+    elif profile.is_categorical_like:
+        strengths.append("Categorical or class-like column")
+
+    if not profile.is_missing_heavy:
+        strengths.append("Enough non-missing values")
+
+    if has_target_name_hint(profile):
+        strengths.append("Name suggests a prediction target")
+
+    if recommendation.task_type == "classification" and profile.unique_count >= 2:
+        strengths.append(f"{profile.unique_count} possible classes")
+
+    if recommendation.task_type == "forecasting" and recommendation.date_column:
+        strengths.append("Can be paired with a date column for forecasting")
+
+    return strengths
+
+
+def get_column_risks(
+    profile: ColumnProfile,
+    recommendation: Candidate,
+) -> list[str]:
+    risks = []
+
+    if profile.is_constant:
+        risks.append("Only one unique value")
+
+    if profile.is_missing_heavy:
+        risks.append("Many missing values")
+    elif profile.missing_ratio > 0:
+        risks.append("Some missing values")
+
+    if profile.is_id_like:
+        risks.append("Looks like an identifier")
+
+    if profile.is_date_like and recommendation.task_type != "forecasting":
+        risks.append("Looks like a date column rather than a prediction target")
+
+    return risks
+
+
+def build_target_explanation(
+    profiles: dict[str, ColumnProfile],
+    recommendation: Candidate,
+) -> TargetExplanation:
+    if not recommendation.target_column:
+        return TargetExplanation(
+            column="",
+            message="No clearly suitable target column was found.",
+            strengths=[],
+            risks=["No recommended target column"],
+        )
+
+    profile = profiles[recommendation.target_column]
+    strengths = get_column_strengths(profile, recommendation)
+    risks = get_column_risks(profile, recommendation)
+
+    if recommendation.task_type == "regression":
+        message = (
+            f"{profile.name} is recommended because it is numeric and looks like "
+            "a value to predict."
+        )
+    elif recommendation.task_type == "classification":
+        message = (
+            f"{profile.name} is recommended because it has class-like values that "
+            "can be predicted."
+        )
+    else:
+        message = (
+            f"{profile.name} is recommended because it is numeric and can be "
+            f"forecast over time using {recommendation.date_column}."
+        )
+
+    return TargetExplanation(
+        column=profile.name,
+        message=message,
+        strengths=strengths,
+        risks=risks,
+    )
+
+
+def build_column_guidance_item(
+    profile: ColumnProfile,
+    recommendation: Candidate,
+    all_target_columns: set[str],
+) -> ColumnGuidance:
+    if profile.name == recommendation.target_column:
+        risks = get_column_risks(profile, recommendation)
+        return ColumnGuidance(
+            column=profile.name,
+            role="recommended_target",
+            severity="medium" if risks else "low",
+            message=(
+                f"{profile.name} is the recommended target column for "
+                f"{recommendation.task_type}."
+            ),
+        )
+
+    if is_leakage_like_column(profile, recommendation):
+        return ColumnGuidance(
+            column=profile.name,
+            role="useful_feature",
+            severity="high",
+            message=(
+                f"{profile.name} may leak the answer for "
+                f"{recommendation.target_column} and should be reviewed before use."
+            ),
+        )
+
+    if profile.is_constant:
+        return ColumnGuidance(
+            column=profile.name,
+            role="not_recommended_target",
+            severity="high",
+            message=(
+                f"{profile.name} has only one unique value, so it should not be "
+                "used as a prediction target."
+            ),
+        )
+
+    if is_postal_code_like_name(profile.normalized_name):
+        return ColumnGuidance(
+            column=profile.name,
+            role="useful_feature",
+            severity="medium",
+            message=(
+                f"{profile.name} looks like a postal or code column; it may be "
+                "useful as a feature, but it should be reviewed carefully."
+            ),
+        )
+
+    if profile.is_id_like:
+        return ColumnGuidance(
+            column=profile.name,
+            role="not_recommended_target",
+            severity="medium",
+            message=(
+                f"{profile.name} looks like an identifier, so it should not be "
+                "used as a prediction target."
+            ),
+        )
+
+    if profile.is_missing_heavy:
+        return ColumnGuidance(
+            column=profile.name,
+            role="not_recommended_target",
+            severity="high",
+            message=(
+                f"{profile.name} has many missing values, so it is risky as a "
+                "prediction target."
+            ),
+        )
+
+    if profile.is_date_like:
+        return ColumnGuidance(
+            column=profile.name,
+            role="possible_date_column",
+            severity="low",
+            message=(
+                f"{profile.name} looks like a date column and may be useful for "
+                "forecasting."
+            ),
+        )
+
+    if has_name_hint(profile.normalized_name, FEATURE_LIKE_NUMERIC_HINTS):
+        return ColumnGuidance(
+            column=profile.name,
+            role="useful_feature",
+            severity="low",
+            message=f"{profile.name} is numeric and may be useful as an input feature.",
+        )
+
+    if profile.name in all_target_columns:
+        return ColumnGuidance(
+            column=profile.name,
+            role="possible_target",
+            severity="low" if profile.missing_ratio == 0 else "medium",
+            message=f"{profile.name} may be a possible prediction target.",
+        )
+
+    if profile.is_numeric:
+        return ColumnGuidance(
+            column=profile.name,
+            role="useful_feature",
+            severity="low",
+            message=f"{profile.name} is numeric and may be useful as an input feature.",
+        )
+
+    return ColumnGuidance(
+        column=profile.name,
+        role="useful_feature",
+        severity="low",
+        message=f"{profile.name} may be useful as an input feature.",
+    )
+
+
+def build_column_guidance(
+    profiles: dict[str, ColumnProfile],
+    recommendation: Candidate,
+    all_candidates: list[Candidate],
+) -> list[ColumnGuidance]:
+    all_target_columns = {candidate.target_column for candidate in all_candidates}
+
+    return [
+        build_column_guidance_item(
+            profile=profile,
+            recommendation=recommendation,
+            all_target_columns=all_target_columns,
+        )
+        for profile in profiles.values()
+    ]
+
+
 def build_warnings(
     df: pd.DataFrame,
     profiles: dict[str, ColumnProfile],
     recommendation: Candidate,
     date_candidates: list[Candidate],
+    column_guidance: list[ColumnGuidance],
+    target_explanation: TargetExplanation,
 ) -> list[str]:
     warnings = []
     row_count = len(df)
@@ -442,6 +721,14 @@ def build_warnings(
                 warnings.append(
                     "The recommended classification target appears imbalanced."
                 )
+
+    if any("leak" in guidance.message.lower() for guidance in column_guidance):
+        warnings.append(
+            "Some columns may leak the answer and should be reviewed before training."
+        )
+
+    if target_explanation.risks:
+        warnings.append("The recommended target has risks that should be reviewed.")
 
     return warnings
 
@@ -584,23 +871,34 @@ def get_analysis_recommendation(
         regression_candidates=regression_candidates,
         classification_candidates=classification_candidates,
     )
-    warnings = build_warnings(
-        df=df,
-        profiles=profiles,
-        recommendation=recommendation,
-        date_candidates=date_candidates,
-    )
-    health_score = calculate_health_score(
-        df=df,
-        recommendation=recommendation,
-        warnings=warnings,
-    )
     all_candidates = sorted(
         forecasting_candidates
         + regression_candidates
         + classification_candidates,
         key=lambda candidate: candidate.score,
         reverse=True,
+    )
+    target_explanation = build_target_explanation(
+        profiles=profiles,
+        recommendation=recommendation,
+    )
+    column_guidance = build_column_guidance(
+        profiles=profiles,
+        recommendation=recommendation,
+        all_candidates=all_candidates,
+    )
+    warnings = build_warnings(
+        df=df,
+        profiles=profiles,
+        recommendation=recommendation,
+        date_candidates=date_candidates,
+        column_guidance=column_guidance,
+        target_explanation=target_explanation,
+    )
+    health_score = calculate_health_score(
+        df=df,
+        recommendation=recommendation,
+        warnings=warnings,
     )
 
     return AnalysisRecommendationResponse(
@@ -613,4 +911,6 @@ def get_analysis_recommendation(
         reasons=build_reasons(recommendation, health_score),
         warnings=warnings,
         alternatives=build_alternatives(recommendation, all_candidates),
+        target_explanation=target_explanation,
+        column_guidance=column_guidance,
     )

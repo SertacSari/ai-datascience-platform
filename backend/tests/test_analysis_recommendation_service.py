@@ -102,6 +102,10 @@ def get_recommendation_for_frame(
     )
 
 
+def guidance_by_column(recommendation) -> dict[str, object]:
+    return {guidance.column: guidance for guidance in recommendation.column_guidance}
+
+
 def test_house_price_dataset_recommends_regression_with_sale_price(
     db_session,
     tmp_path,
@@ -119,6 +123,39 @@ def test_house_price_dataset_recommends_regression_with_sale_price(
     assert recommendation.confidence in {"high", "medium"}
     assert recommendation.health_score >= 70
     assert any("sale_price is numeric" in reason for reason in recommendation.reasons)
+
+
+def test_recommended_target_has_target_explanation(db_session, tmp_path) -> None:
+    recommendation = get_recommendation_for_frame(
+        db_session,
+        tmp_path,
+        house_price_frame(),
+        "target_explanation_user",
+    )
+
+    assert recommendation.target_explanation.column == "sale_price"
+    assert "sale_price is recommended" in recommendation.target_explanation.message
+    assert "Numeric column" in recommendation.target_explanation.strengths
+    assert "Name suggests a prediction target" in (
+        recommendation.target_explanation.strengths
+    )
+    assert recommendation.target_explanation.risks == []
+
+
+def test_house_price_guidance_marks_target_and_features(db_session, tmp_path) -> None:
+    recommendation = get_recommendation_for_frame(
+        db_session,
+        tmp_path,
+        house_price_frame(),
+        "house_price_guidance_user",
+    )
+    guidance = guidance_by_column(recommendation)
+
+    assert guidance["sale_price"].role == "recommended_target"
+    assert guidance["sale_price"].severity == "low"
+    assert guidance["size_sqft"].role == "useful_feature"
+    assert guidance["size_sqft"].severity == "low"
+    assert guidance["bedrooms"].role == "useful_feature"
 
 
 def test_daily_sales_dataset_recommends_forecasting_with_sales_and_date(
@@ -167,6 +204,9 @@ def test_id_like_columns_are_not_selected_as_targets(db_session, tmp_path) -> No
         "customer_id",
         "id",
     }
+    assert guidance_by_column(recommendation)["house_id"].role == (
+        "not_recommended_target"
+    )
 
 
 def test_missing_heavy_columns_reduce_confidence_and_health(
@@ -187,6 +227,9 @@ def test_missing_heavy_columns_reduce_confidence_and_health(
     assert recommendation.confidence in {"medium", "low"}
     assert recommendation.health_score < 80
     assert any("missing" in warning.lower() for warning in recommendation.warnings)
+    guidance = guidance_by_column(recommendation)
+    assert guidance["sale_price"].role == "not_recommended_target"
+    assert guidance["sale_price"].severity == "high"
 
 
 def test_date_column_same_as_target_is_not_recommended(
@@ -208,6 +251,20 @@ def test_date_column_same_as_target_is_not_recommended(
     )
 
     assert recommendation.recommended_target_column != recommendation.recommended_date_column
+
+
+def test_date_column_is_marked_as_possible_date_column(db_session, tmp_path) -> None:
+    recommendation = get_recommendation_for_frame(
+        db_session,
+        tmp_path,
+        daily_sales_frame(),
+        "date_guidance_user",
+    )
+
+    guidance = guidance_by_column(recommendation)
+
+    assert guidance["date"].role == "possible_date_column"
+    assert guidance["date"].severity == "low"
 
 
 def test_all_categorical_dataset_can_recommend_classification(
@@ -257,6 +314,67 @@ def test_numeric_dataset_without_target_like_names_returns_low_or_medium_confide
     assert recommendation.confidence in {"low", "medium"}
 
 
+def test_zip_postal_code_columns_get_caution(db_session, tmp_path) -> None:
+    dataframe = house_price_frame()
+    dataframe["zip"] = ["10001", "10002"] * 40
+
+    recommendation = get_recommendation_for_frame(
+        db_session,
+        tmp_path,
+        dataframe,
+        "zip_guidance_user",
+    )
+    guidance = guidance_by_column(recommendation)["zip"]
+
+    assert guidance.role in {"useful_feature", "not_recommended_target"}
+    assert guidance.severity == "medium"
+    assert "reviewed carefully" in guidance.message
+
+
+def test_leakage_like_column_creates_high_severity_guidance_and_warning(
+    db_session,
+    tmp_path,
+) -> None:
+    dataframe = churn_frame()
+    dataframe["churn_reason"] = [
+        "price" if value == "yes" else "none" for value in dataframe["churned"]
+    ]
+
+    recommendation = get_recommendation_for_frame(
+        db_session,
+        tmp_path,
+        dataframe,
+        "leakage_guidance_user",
+    )
+    guidance = guidance_by_column(recommendation)["churn_reason"]
+
+    assert recommendation.recommended_target_column == "churned"
+    assert guidance.role == "useful_feature"
+    assert guidance.severity == "high"
+    assert "leak the answer" in guidance.message
+    assert any("leak the answer" in warning for warning in recommendation.warnings)
+
+
+def test_constant_column_gets_high_severity_not_recommended_target(
+    db_session,
+    tmp_path,
+) -> None:
+    dataframe = house_price_frame()
+    dataframe["constant_flag"] = "same"
+
+    recommendation = get_recommendation_for_frame(
+        db_session,
+        tmp_path,
+        dataframe,
+        "constant_guidance_user",
+    )
+    guidance = guidance_by_column(recommendation)["constant_flag"]
+
+    assert guidance.role == "not_recommended_target"
+    assert guidance.severity == "high"
+    assert "only one unique value" in guidance.message
+
+
 def test_analysis_recommendation_enforces_dataset_ownership(
     db_session,
     tmp_path,
@@ -302,6 +420,8 @@ def test_analysis_recommendation_response_shape_is_stable(
         "reasons",
         "warnings",
         "alternatives",
+        "target_explanation",
+        "column_guidance",
     }
     assert recommendation.alternatives
     assert set(recommendation.alternatives[0].model_dump()) == {
@@ -309,4 +429,16 @@ def test_analysis_recommendation_response_shape_is_stable(
         "target_column",
         "date_column",
         "reason",
+    }
+    assert set(recommendation.target_explanation.model_dump()) == {
+        "column",
+        "message",
+        "strengths",
+        "risks",
+    }
+    assert set(recommendation.column_guidance[0].model_dump()) == {
+        "column",
+        "role",
+        "severity",
+        "message",
     }
