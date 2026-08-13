@@ -630,8 +630,147 @@ small {
   color: var(--err);
 }
 
-.chart-card {
+.insights-card {
   grid-column: span 8;
+}
+
+.insights-card .card-head {
+  margin-bottom: 12px;
+}
+
+.insight-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.insight-summary-grid div {
+  display: grid;
+  gap: 5px;
+  padding: 11px;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.insight-summary-grid div:last-child {
+  border-right: 0;
+}
+
+.insight-summary-grid span,
+.insight-panel > strong,
+.numeric-summary-list > strong,
+.section-kicker strong {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+
+.insight-summary-grid strong {
+  overflow-wrap: anywhere;
+  font-size: 17px;
+}
+
+.insight-summary-grid small,
+.numeric-summary-list small,
+.section-kicker span,
+.analysis-helper {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.insight-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(220px, .75fr);
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.insight-panel,
+.numeric-summary-list,
+.empty-insights {
+  display: grid;
+  gap: 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 11px;
+  background: var(--bg);
+}
+
+.insight-bars {
+  display: grid;
+  gap: 8px;
+}
+
+.insight-bar-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 1fr) minmax(90px, 1.5fr) auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.insight-bar-row span,
+.numeric-summary-list span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.insight-bar-row div {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.insight-bar-row i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+}
+
+.insight-bar-row em {
+  color: var(--muted);
+  font-style: normal;
+  font-weight: 900;
+}
+
+.mini-distribution {
+  height: 76px;
+  display: flex;
+  align-items: end;
+  gap: 5px;
+  padding: 8px 0 0;
+}
+
+.mini-distribution i {
+  flex: 1;
+  min-width: 5px;
+  border-radius: 4px 4px 0 0;
+  background: var(--primary);
+  opacity: .86;
+}
+
+.numeric-summary-list {
+  margin-top: 10px;
+}
+
+.numeric-summary-list div {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) repeat(3, auto);
+  gap: 8px;
+  align-items: center;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.empty-insights p {
+  color: var(--muted);
 }
 
 .chart-canvas {
@@ -729,6 +868,22 @@ small {
   grid-column: span 6;
 }
 
+.backend-card {
+  order: 1;
+}
+
+.model-result-card {
+  order: 2;
+}
+
+.technical-card {
+  order: 3;
+}
+
+.preview-table-card {
+  order: 4;
+}
+
 .mini-table,
 .reports-table {
   width: 100%;
@@ -805,10 +960,32 @@ small {
   background: var(--err-tint);
 }
 
+.analysis-helper {
+  display: grid;
+  gap: 5px;
+}
+
+.analysis-helper p {
+  overflow-wrap: anywhere;
+}
+
+.job-queue {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.section-kicker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .job-list {
   display: grid;
   gap: 8px;
-  margin-top: 12px;
+  margin-top: 8px;
 }
 
 .job-row {
@@ -955,7 +1132,9 @@ small {
 .result-block {
   display: grid;
   gap: 8px;
-  margin-top: 12px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
 }
 
 .result-block strong {
@@ -991,6 +1170,7 @@ small {
   padding: 8px 10px;
   text-align: left;
   vertical-align: top;
+  overflow-wrap: anywhere;
 }
 
 .result-table th {
@@ -1352,7 +1532,7 @@ small {
 
   .dropzone,
   .kpi-strip,
-  .chart-card,
+  .insights-card,
   .ai-card,
   .technical-card,
   .backend-card,
@@ -1421,7 +1601,7 @@ small {
 
   .dropzone,
   .kpi-strip,
-  .chart-card,
+  .insights-card,
   .ai-card,
   .technical-card,
   .backend-card,
@@ -1432,6 +1612,25 @@ small {
 
   .analysis-form {
     grid-template-columns: 1fr;
+  }
+
+  .insight-summary-grid,
+  .insight-split,
+  .numeric-summary-list div {
+    grid-template-columns: 1fr;
+  }
+
+  .insight-summary-grid div {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .insight-summary-grid div:last-child {
+    border-bottom: 0;
+  }
+
+  .insight-bar-row {
+    grid-template-columns: minmax(0, 1fr) minmax(84px, 1fr) auto;
   }
 
   .metric-summary-grid {

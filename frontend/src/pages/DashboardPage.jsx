@@ -14,8 +14,6 @@ import {
 import AiSummaryCard from "../components/AiSummaryCard";
 import Badge from "../components/Badge";
 import Dropzone from "../components/Dropzone";
-import LineChart from "../components/LineChart";
-import Segmented from "../components/Segmented";
 import StatCard from "../components/StatCard";
 import { emptyDashboardData, useSession } from "../context/SessionContext";
 import { statRows, technicalRows } from "../lib/dashboardSamples";
@@ -24,6 +22,45 @@ function numericColumnsFromPreview(preview) {
   return (preview?.column_info || [])
     .filter((column) => /int|float|double|decimal|number/i.test(column.dtype))
     .map((column) => column.name);
+}
+
+function isNumericPreviewColumn(preview, columnName) {
+  return numericColumnsFromPreview(preview).includes(columnName);
+}
+
+function scoreTargetCandidate(columnName, dtype = "") {
+  const normalized = String(columnName).toLowerCase();
+  const normalizedType = String(dtype).toLowerCase();
+  let score = 0;
+
+  if (/(target|label|outcome|result|class)$/i.test(normalized)) score += 35;
+  if (/(churn|churned|left|default|approved|fraud|status)$/i.test(normalized)) score += 32;
+  if (/(sale_price|price|revenue|sales|amount|cost|value)$/i.test(normalized)) score += 30;
+  if (/(score|rating|demand|quantity|total)$/i.test(normalized)) score += 18;
+  if (/id$|^id$|uuid|index|row|code|zip|postal/i.test(normalized)) score -= 35;
+  if (/int|float|double|decimal|number/i.test(normalizedType)) score += 6;
+
+  return score;
+}
+
+function chooseDefaultTargetColumn(preview) {
+  const columns = preview?.columns || [];
+  const columnInfo = preview?.column_info || [];
+  if (!columns.length) return "";
+
+  const candidates = columns.map((name, index) => {
+    const info = columnInfo.find((column) => column.name === name) || {};
+    return {
+      index,
+      name,
+      score: scoreTargetCandidate(name, info.dtype)
+    };
+  });
+
+  const best = candidates.sort((a, b) => b.score - a.score || b.index - a.index)[0];
+  if (best && best.score > 0) return best.name;
+
+  return numericColumnsFromPreview(preview)[0] || columns[0] || "";
 }
 
 function dashboardStats(dataset, cleaning, jobs) {
@@ -55,6 +92,196 @@ function technicalFromBackend(cleaning, preview) {
     ["Categorical columns", categorical, "Normal", "ok"],
     ["Preview rows", preview?.preview?.length || 0, preview ? "Loaded" : "Review", preview ? "ok" : "warn"]
   ];
+}
+
+function columnTypeCounts(preview) {
+  return (preview?.column_info || []).reduce(
+    (counts, column) => {
+      if (/int|float|double|decimal|number/i.test(column.dtype)) counts.numeric += 1;
+      else if (/date|time/i.test(column.dtype)) counts.datetime += 1;
+      else counts.categorical += 1;
+      return counts;
+    },
+    { categorical: 0, datetime: 0, numeric: 0 }
+  );
+}
+
+function topMissingColumns(cleaning, preview) {
+  const missingValues = cleaning?.missing_values || {};
+  const fromCleaning = Object.entries(missingValues)
+    .map(([name, count]) => ({ count, name }))
+    .filter((column) => column.count > 0);
+
+  const fromPreview = (preview?.column_info || [])
+    .map((column) => ({ count: column.missing_count, name: column.name }))
+    .filter((column) => column.count > 0);
+
+  return (fromCleaning.length ? fromCleaning : fromPreview)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 4);
+}
+
+function prioritizedNumericColumns(preview, targetColumn) {
+  const numericColumns = numericColumnsFromPreview(preview);
+  if (!numericColumns.length) return [];
+
+  if (targetColumn && numericColumns.includes(targetColumn)) {
+    return [targetColumn, ...numericColumns.filter((column) => column !== targetColumn)];
+  }
+
+  return numericColumns;
+}
+
+function numericSummaryRows(preview, targetColumn) {
+  const statistics = preview?.summary_statistics || {};
+
+  return prioritizedNumericColumns(preview, targetColumn)
+    .map((columnName) => {
+      const stats = statistics[columnName] || {};
+      return {
+        max: stats.max,
+        mean: stats.mean,
+        min: stats.min,
+        name: columnName
+      };
+    })
+    .filter((column) => [column.min, column.mean, column.max].some((value) => typeof value === "number"))
+    .slice(0, 3);
+}
+
+function previewDistribution(preview, targetColumn) {
+  const numericColumn = isNumericPreviewColumn(preview, targetColumn)
+    ? targetColumn
+    : numericColumnsFromPreview(preview)[0];
+  if (!numericColumn) return null;
+
+  const values = (preview?.preview || [])
+    .map((row) => Number(row[numericColumn]))
+    .filter((value) => Number.isFinite(value));
+  if (!values.length) return null;
+
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+  const range = max - min || 1;
+
+  return {
+    column: numericColumn,
+    values: values.slice(0, 10).map((value) => ({
+      height: Math.max(8, Math.round(((value - min) / range) * 58) + 8),
+      value
+    }))
+  };
+}
+
+function DatasetInsightsCard({ cleaning, dataset, preview, targetColumn }) {
+  const typeCounts = columnTypeCounts(preview);
+  const missingColumns = topMissingColumns(cleaning, preview);
+  const numericRows = numericSummaryRows(preview, targetColumn);
+  const distribution = previewDistribution(preview, targetColumn);
+  const duplicateRows = cleaning?.duplicate_rows ?? preview?.duplicate_rows ?? 0;
+  const targetIsNumeric = isNumericPreviewColumn(preview, targetColumn);
+
+  return (
+    <section className="card insights-card">
+      <div className="card-head">
+        <div>
+          <p className="eyebrow">Dataset insights</p>
+          <h2>{dataset ? "Target-aware profile" : "Waiting for dataset"}</h2>
+        </div>
+        <Badge tone={dataset ? duplicateRows ? "warn" : "ok" : "neutral"}>
+          {dataset ? `${dataset.column_count} columns` : "No data"}
+        </Badge>
+      </div>
+
+      {dataset && preview ? (
+        <>
+          <div className="insight-summary-grid">
+            <div>
+              <span>Rows</span>
+              <strong>{dataset.row_count.toLocaleString()}</strong>
+              <small>Uploaded dataset</small>
+            </div>
+            <div>
+              <span>Duplicates</span>
+              <strong>{duplicateRows.toLocaleString()}</strong>
+              <small>{duplicateRows ? "Review before modeling" : "No duplicate rows found"}</small>
+            </div>
+            <div>
+              <span>Selected target</span>
+              <strong>{targetColumn || "Not selected"}</strong>
+              <small>{targetIsNumeric ? "Numeric target" : "Choose target in analysis request"}</small>
+            </div>
+            <div>
+              <span>Column mix</span>
+              <strong>{typeCounts.numeric} num / {typeCounts.categorical} cat</strong>
+              <small>{typeCounts.datetime ? `${typeCounts.datetime} date-like` : "Based on backend dtypes"}</small>
+            </div>
+          </div>
+
+          <div className="insight-split">
+            <div className="insight-panel">
+              <strong>Missing values by column</strong>
+              {missingColumns.length ? (
+                <div className="insight-bars">
+                  {missingColumns.map((column) => {
+                    const width = Math.max(8, Math.round((column.count / dataset.row_count) * 100));
+                    return (
+                      <div className="insight-bar-row" key={column.name}>
+                        <span title={column.name}>{column.name}</span>
+                        <div><i style={{ width: `${Math.min(width, 100)}%` }} /></div>
+                        <em>{column.count.toLocaleString()}</em>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="muted">No missing values were returned for the uploaded dataset.</p>
+              )}
+            </div>
+
+            <div className="insight-panel">
+              <strong>Preview distribution</strong>
+              {distribution ? (
+                <>
+                  <div className="mini-distribution" aria-label={`Preview distribution for ${distribution.column}`}>
+                    {distribution.values.map((item, index) => (
+                      <i key={`${item.value}-${index}`} style={{ height: `${item.height}px` }} title={formatNumberMetric(item.value)} />
+                    ))}
+                  </div>
+                  <p className="muted">
+                    {distribution.column}{distribution.column === targetColumn ? " target" : ""} from visible preview rows
+                  </p>
+                </>
+              ) : (
+                <p className="muted">Upload data with numeric preview values to show a small distribution.</p>
+              )}
+            </div>
+          </div>
+
+          <div className="numeric-summary-list">
+            <strong>Important numeric columns</strong>
+            {numericRows.length ? (
+              numericRows.map((column) => (
+                <div key={column.name}>
+                  <span title={column.name}>{column.name}</span>
+                  <small>Min {formatNumberMetric(column.min)}</small>
+                  <small>Mean {formatNumberMetric(column.mean)}</small>
+                  <small>Max {formatNumberMetric(column.max)}</small>
+                </div>
+              ))
+            ) : (
+              <p className="muted">No numeric summary statistics were returned.</p>
+            )}
+          </div>
+        </>
+      ) : (
+        <div className="empty-insights">
+          <strong>No dataset loaded</strong>
+          <p>Upload a CSV or Excel file to see real column mix, missing values, duplicate rows, and preview-based numeric signals.</p>
+        </div>
+      )}
+    </section>
+  );
 }
 
 function DatasetPreviewCard({ dataset, preview }) {
@@ -778,7 +1005,6 @@ export default function DashboardPage() {
     setDashboardData,
     setJobs
   } = useSession();
-  const [range, setRange] = useState("1M");
   const [upload, setUpload] = useState({ status: "idle", file: "", progress: 0, message: "" });
   const [jobForm, setJobForm] = useState({ task_type: "regression", target_column: "", date_column: "" });
   const [cleanStatus, setCleanStatus] = useState({ type: "idle", message: "" });
@@ -821,8 +1047,7 @@ export default function DashboardPage() {
         getCleaningReport(uploaded.id),
         listAnalysisJobs()
       ]);
-      const firstNumeric = numericColumnsFromPreview(nextPreview)[0];
-      const fallbackTarget = firstNumeric || nextPreview.columns[0] || "";
+      const fallbackTarget = chooseDefaultTargetColumn(nextPreview);
       const firstDateColumn = nextPreview.columns.find((column) => column !== fallbackTarget) || "";
 
       setDashboardData({
@@ -833,7 +1058,7 @@ export default function DashboardPage() {
       });
       setJobs(nextJobs);
       setJobForm({
-        task_type: firstNumeric ? "regression" : "classification",
+        task_type: isNumericPreviewColumn(nextPreview, fallbackTarget) ? "regression" : "classification",
         target_column: fallbackTarget,
         date_column: firstDateColumn
       });
@@ -997,20 +1222,12 @@ export default function DashboardPage() {
           ))}
         </section>
 
-        <section className="card chart-card">
-          <div className="card-head">
-            <div>
-              <p className="eyebrow">Dataset overview</p>
-              <h2>Profile placeholder</h2>
-            </div>
-            <Segmented onChange={setRange} value={range} values={["1W", "1M", "3M", "1Y"]} />
-          </div>
-          <LineChart label={`Sample profile chart for ${range}`} range={range} />
-          <div className="legend-row">
-            <span><i className="legend-dot solid" />Sample</span>
-            <span><i className="legend-dot muted" />Reference</span>
-          </div>
-        </section>
+        <DatasetInsightsCard
+          cleaning={cleaning}
+          dataset={dataset}
+          preview={preview}
+          targetColumn={jobForm.target_column}
+        />
 
         <AiSummaryCard cleaning={cleaning} dataset={dataset} preview={preview} />
 
@@ -1120,51 +1337,57 @@ export default function DashboardPage() {
               Create job
             </button>
           </form>
-          <p className="muted">
-            {dataset
-              ? "Create the job first; classification, regression, and forecasting jobs can be run here."
-              : "Upload a dataset to enable backend analysis requests."}
-          </p>
-          <p className="muted">
-            Classification, regression, and forecasting training are available.
-          </p>
-          {numericColumns.length ? <p className="muted">Numeric columns: {numericColumns.slice(0, 4).join(", ")}</p> : null}
+          <div className="analysis-helper">
+            <p>
+              {dataset
+                ? "Create the request, then run it from the recent jobs list."
+                : "Upload a dataset to enable analysis requests."}
+            </p>
+            <p>Classification, regression, and forecasting training are available.</p>
+            {numericColumns.length ? <p>Numeric columns: {numericColumns.slice(0, 4).join(", ")}</p> : null}
+          </div>
           {jobStatus.message ? <div aria-live="polite" className={`backend-status ${jobStatus.type}`} role="status">{jobStatus.message}</div> : null}
           {runStatus.message ? <div aria-live="polite" className={`backend-status ${runStatus.type}`} role="status">{runStatus.message}</div> : null}
           {jobs.length ? (
-            <div className="job-list">
-              {jobs.slice(0, 4).map((job) => (
-                <div className="job-row" key={job.id}>
-                  <span className="job-details">
-                    <strong>#{job.id} {job.task_type}</strong>
-                    <small className="job-file">{job.dataset_file_name || "Uploaded dataset"}</small>
-                    <small className="job-target">Target: {job.target_column}</small>
-                    <small className="job-source">Source: {job.dataset_source_label || "Original uploaded file"}</small>
-                  </span>
-                  <Badge tone={job.status === "failed" ? "err" : job.status === "completed" ? "ok" : "warn"}>{job.status}</Badge>
-                  {isRunnableTask(job.task_type) && job.status === "created" ? (
-                    <button
-                      className="button sm"
-                      disabled={runStatus.type === "loading"}
-                      onClick={() => handleRunJob(job)}
-                      type="button"
-                    >
-                      {runStatus.type === "loading" && runStatus.jobId === job.id ? "Running..." : "Run job"}
-                    </button>
-                  ) : null}
-                  {isRunnableTask(job.task_type) && job.status === "completed" ? (
-                    <button
-                      className="button sm"
-                      disabled={runStatus.type === "loading"}
-                      onClick={() => handleViewResult(job)}
-                      type="button"
-                    >
-                      {runStatus.type === "loading" && runStatus.jobId === job.id ? "Loading..." : "View result"}
-                    </button>
-                  ) : null}
-                </div>
-              ))}
-            </div>
+            <section className="job-queue" aria-label="Recent analysis jobs">
+              <div className="section-kicker">
+                <strong>Recent jobs</strong>
+                <span>{jobs.slice(0, 4).length} shown</span>
+              </div>
+              <div className="job-list">
+                {jobs.slice(0, 4).map((job) => (
+                  <div className="job-row" key={job.id}>
+                    <span className="job-details">
+                      <strong>#{job.id} {job.task_type}</strong>
+                      <small className="job-file" title={job.dataset_file_name || "Uploaded dataset"}>{job.dataset_file_name || "Uploaded dataset"}</small>
+                      <small className="job-target">Target: {job.target_column}</small>
+                      <small className="job-source">Source: {job.dataset_source_label || "Original uploaded file"}</small>
+                    </span>
+                    <Badge tone={job.status === "failed" ? "err" : job.status === "completed" ? "ok" : "warn"}>{job.status}</Badge>
+                    {isRunnableTask(job.task_type) && job.status === "created" ? (
+                      <button
+                        className="button sm"
+                        disabled={runStatus.type === "loading"}
+                        onClick={() => handleRunJob(job)}
+                        type="button"
+                      >
+                        {runStatus.type === "loading" && runStatus.jobId === job.id ? "Running..." : "Run job"}
+                      </button>
+                    ) : null}
+                    {isRunnableTask(job.task_type) && job.status === "completed" ? (
+                      <button
+                        className="button sm"
+                        disabled={runStatus.type === "loading"}
+                        onClick={() => handleViewResult(job)}
+                        type="button"
+                      >
+                        {runStatus.type === "loading" && runStatus.jobId === job.id ? "Loading..." : "View result"}
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </section>
           ) : null}
         </section>
 
