@@ -888,6 +888,12 @@ small {
   color: var(--muted);
 }
 
+.result-interpretation p,
+.result-warning-panel p,
+.backend-status {
+  overflow-wrap: anywhere;
+}
+
 .metric-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

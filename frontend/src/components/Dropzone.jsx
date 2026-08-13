@@ -30,7 +30,7 @@ export default function Dropzone({ onUpload, upload }) {
       <input accept=".csv,.xlsx,.xls" className="sr-only" onChange={(event) => handleFiles(event.target.files)} ref={inputRef} type="file" />
       <div className="drop-icon">CSV/XLS</div>
       <h2>Drop a CSV or Excel file here</h2>
-      <p>CSV or Excel. Recommended max size: 20 MB.</p>
+      <p>CSV or Excel. Maximum size: 50 MB.</p>
       {upload.status === "uploading" ? (
         <div className="upload-status">
           <span>{upload.file}</span>

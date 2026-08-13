@@ -15,9 +15,10 @@ with at least two classes, and a few missing or duplicate values.
    - Confirm the response contains no password or password hash.
 2. **Login** — `POST /auth/login`
    - Enter the registered email in the OAuth2 `username` field.
-   - Confirm an access token is returned.
+   - Confirm the response is `{ "message": "Logged in" }`.
+   - Confirm the auth token is set as an HttpOnly cookie, not returned in JSON.
 3. **Authorize and inspect the current user**
-   - Use Swagger's **Authorize** button with the same email and password.
+   - If testing in Swagger, use the browser cookie created by login or the backend's bearer-token fallback for compatibility.
    - Call `GET /auth/me` and confirm it returns the registered user.
 4. **Upload** — `POST /datasets/upload`
    - Upload the CSV and confirm filename, row count, and column count.
@@ -37,6 +38,13 @@ with at least two classes, and a few missing or duplicate values.
    - Confirm only the authorized user's jobs are returned.
 10. **Get one job** — `GET /analysis/jobs/{job_id}`
     - Confirm the created job is returned.
+11. **Run and inspect a job** — `POST /analysis/jobs/{job_id}/run`
+    - Confirm classification, regression, and forecasting jobs can complete with suitable datasets.
+12. **Get saved result** — `GET /analysis/jobs/{job_id}/result`
+    - Confirm saved metrics and interpretation are returned after completion.
+13. **AI explanation** — `POST /analysis/jobs/{job_id}/ai-explanation`
+    - With Ollama running and AI enabled, confirm a local explanation is generated.
+    - Call `GET /analysis/jobs/{job_id}/ai-explanation` and confirm the cached explanation is returned.
 
 For ownership checks, register a second user and confirm the first user's
 dataset and job identifiers return `404` when requested as the second user.

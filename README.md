@@ -1,8 +1,8 @@
 # BasitAnaliz
 
-BasitAnaliz is a local data analysis web application built for the CS395 project. It lets a user register, upload tabular datasets, inspect data quality, clean common dataset issues, create analysis jobs, and run a first real classification training flow.
+BasitAnaliz is a local data analysis web application built for the CS395 project. It lets a user register, upload tabular datasets, inspect data quality, clean common dataset issues, create and run analysis jobs, view saved ML results, and generate local plain-language AI explanations.
 
-The project is currently focused on a clear end-to-end vertical slice rather than a full production analytics platform. Classification training is implemented. Regression training, forecasting training, report generation, and AI explanations are planned later.
+The project is designed as a local end-product prototype rather than a cloud-deployed analytics platform. Classification, regression, forecasting, deterministic result guidance, and local Gemma/Ollama explanations are implemented. Report/PDF generation and advanced dashboard polishing remain future work.
 
 ## Current Features
 
@@ -17,8 +17,8 @@ The project is currently focused on a clear end-to-end vertical slice rather tha
   - regression
   - forecasting
 - Forecasting job validation with a required date column
-- Classification ML readiness checks before training
-- Classification model training with scikit-learn
+- ML readiness checks before job creation and training
+- Classification, regression, and forecasting training with scikit-learn
 - Saved classification results:
   - accuracy
   - precision
@@ -27,7 +27,14 @@ The project is currently focused on a clear end-to-end vertical slice rather tha
   - class distribution
   - confusion matrix
   - classification report
-- React dashboard for upload, cleaning, job creation, job running, and saved result viewing
+- Saved regression and forecasting results:
+  - MAE
+  - RMSE
+  - R2 score
+  - prediction sample
+  - deterministic quality level, warnings, and recommended actions
+- Local Gemma/Ollama AI explanation layer using safe summarized result data
+- React dashboard for upload, cleaning, job creation, job running, saved result viewing, and cached AI explanations
 
 ## Tech Stack
 
@@ -40,6 +47,7 @@ The project is currently focused on a clear end-to-end vertical slice rather tha
 - Pydantic
 - pandas
 - scikit-learn
+- httpx
 - python-jose
 - passlib/bcrypt
 - pytest
@@ -119,14 +127,33 @@ AUTH_COOKIE_SECURE=false
 UPLOAD_DIR=uploads
 MAX_UPLOAD_SIZE_MB=50
 MAX_DATAFRAME_MEMORY_MB=200
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=gemma3:4b
+AI_EXPLANATION_ENABLED=false
+AI_EXPLANATION_TIMEOUT_SECONDS=30
 ```
 
-Create database tables:
+Create database tables and apply migrations:
 
 ```bash
 cd backend
 python create_tables.py
+set -a
+source .env
+set +a
+psql "$DATABASE_URL" -f migrations/001_add_cleaned_file_path.sql
+psql "$DATABASE_URL" -f migrations/002_harden_analysis_jobs.sql
+psql "$DATABASE_URL" -f migrations/003_unique_model_result_per_analysis.sql
+psql "$DATABASE_URL" -f migrations/004_unique_ai_explanation_per_analysis.sql
 ```
+
+For local AI explanations, install Ollama and download the model:
+
+```bash
+ollama pull gemma3:4b
+```
+
+Then set `AI_EXPLANATION_ENABLED=true` in `backend/.env` and keep Ollama running locally while using the explanation feature.
 
 Run the backend:
 
@@ -174,16 +201,18 @@ npm run build
 The latest checked state passed:
 
 ```text
-Backend tests: 62 passed
+Backend tests: 108 passed
 Frontend build: passed
 ```
 
 ## Manual Smoke Test
 
-Use the included sample dataset:
+Use the included sample datasets:
 
 ```text
 data/mock_datasets/customer_churn_classification.csv
+data/mock_datasets/house_price_regression.csv
+data/mock_datasets/daily_sales_forecasting.csv
 ```
 
 Recommended flow:
@@ -191,14 +220,14 @@ Recommended flow:
 1. Register or log in.
 2. Upload the churn classification CSV.
 3. Confirm preview and cleaning cards show backend data.
-4. Create a classification job.
-5. Choose `churned` as the target column.
-6. Run the job.
-7. Confirm the job becomes `completed`.
-8. Confirm classification metrics and tables are shown.
+4. Clean one dataset.
+5. Create and run classification, regression, and forecasting jobs.
+6. Confirm each job becomes `completed`.
+7. Confirm metrics, deterministic guidance, and result tables are shown.
+8. Generate a local AI explanation for one completed result.
 9. Refresh the page.
 10. Click `View result` on the completed job.
-11. Confirm the saved result loads again.
+11. Confirm the saved result and cached AI explanation load again.
 
 ## Security Notes
 
@@ -208,19 +237,19 @@ Recommended flow:
 - Bearer token authentication is still supported as a backend fallback for compatibility.
 - Local uploaded files are ignored by Git.
 - `.env` files are ignored by Git.
+- Gemma/Ollama receives only summarized ML result facts, not full datasets, raw CSV rows, upload paths, tokens, passwords, or secrets.
 
 ## Current Limitations
 
-- Classification training is implemented; regression and forecasting training are not implemented yet.
 - The saved model artifact is not persisted yet; the app currently persists model results and metrics.
-- AI explanation generation is not active yet.
 - Report generation is not part of the current completed flow.
-- The app is intended to run locally during this project phase.
+- The app is intended to run locally; it is not cloud-deployed.
+- The dataset overview chart is still a placeholder and should be replaced or removed in a final polish pass.
 
 ## Planned Next Work
 
-- Add regression training.
-- Add forecasting training.
-- Improve result history and report views.
-- Add an explanation layer that can translate technical ML results into plain-language summaries.
+- Improve final frontend layout symmetry and visual polish.
+- Add smart task/target/date-column recommendations.
+- Replace the placeholder dataset chart with real dataset insight charts.
+- Add report/PDF generation if required for the final deliverable.
 - Add local DevOps/CI practice, such as automated test and build checks.

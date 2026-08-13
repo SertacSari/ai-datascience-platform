@@ -809,6 +809,9 @@ export default function DashboardPage() {
     setDashboardData(emptyDashboardData());
     setCleanStatus({ type: "idle", message: "" });
     setJobStatus({ type: "idle", message: "" });
+    setRunStatus({ jobId: null, type: "idle", message: "" });
+    setModelResult(null);
+    setAiExplanationState({ explanation: null, jobId: null, message: "", status: "idle" });
 
     try {
       const uploaded = await uploadDataset(file);

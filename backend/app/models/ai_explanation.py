@@ -1,6 +1,14 @@
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -8,6 +16,9 @@ from app.database import Base
 
 class AIExplanation(Base):
     __tablename__ = "ai_explanations"
+    __table_args__ = (
+        UniqueConstraint("analysis_id", name="uq_ai_explanations_analysis_id"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     analysis_id = Column(Integer, ForeignKey("analysis_jobs.id"), nullable=False)

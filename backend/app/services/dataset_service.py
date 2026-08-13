@@ -215,7 +215,8 @@ def upload_dataset(db: Session, file: UploadFile, current_user: User) -> Dataset
 
     allowed_extensions = {".csv", ".xlsx", ".xls"}
 
-    file_extension = Path(file.filename).suffix.lower()
+    safe_display_name = Path(file.filename).name
+    file_extension = Path(safe_display_name).suffix.lower()
 
     if file_extension not in allowed_extensions:
         raise HTTPException(
@@ -225,7 +226,7 @@ def upload_dataset(db: Session, file: UploadFile, current_user: User) -> Dataset
 
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-    unique_filename = f"{uuid4()}_{Path(file.filename).name}"
+    unique_filename = f"{uuid4()}_{safe_display_name}"
     file_path = UPLOAD_DIR / unique_filename
 
     try:
@@ -257,7 +258,7 @@ def upload_dataset(db: Session, file: UploadFile, current_user: User) -> Dataset
 
         new_dataset = Dataset(
             user_id=current_user.id,
-            file_name=file.filename,
+            file_name=safe_display_name,
             file_path=str(file_path),
             row_count=row_count,
             column_count=column_count,
