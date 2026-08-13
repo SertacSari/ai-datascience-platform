@@ -969,6 +969,91 @@ small {
   overflow-wrap: anywhere;
 }
 
+.recommendation-panel {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  background: var(--bg);
+}
+
+.recommendation-panel.unavailable {
+  border-color: var(--warn);
+  background: var(--warn-tint);
+}
+
+.recommendation-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.recommendation-summary div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 9px;
+  border-right: 1px solid var(--border);
+  background: var(--card);
+}
+
+.recommendation-summary div:last-child {
+  border-right: 0;
+}
+
+.recommendation-summary span,
+.recommendation-detail-grid strong,
+.recommendation-alternatives strong {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+
+.recommendation-summary strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.recommendation-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.recommendation-detail-grid div,
+.recommendation-alternatives {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 9px;
+  background: var(--card);
+}
+
+.recommendation-detail-grid ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 16px;
+  color: var(--muted);
+}
+
+.recommendation-detail-grid li,
+.recommendation-alternatives p {
+  overflow-wrap: anywhere;
+}
+
+.recommendation-alternatives p {
+  color: var(--muted);
+}
+
 .job-queue {
   margin-top: 14px;
   padding-top: 12px;
@@ -1616,16 +1701,20 @@ small {
 
   .insight-summary-grid,
   .insight-split,
-  .numeric-summary-list div {
+  .numeric-summary-list div,
+  .recommendation-summary,
+  .recommendation-detail-grid {
     grid-template-columns: 1fr;
   }
 
-  .insight-summary-grid div {
+  .insight-summary-grid div,
+  .recommendation-summary div {
     border-right: 0;
     border-bottom: 1px solid var(--border);
   }
 
-  .insight-summary-grid div:last-child {
+  .insight-summary-grid div:last-child,
+  .recommendation-summary div:last-child {
     border-bottom: 0;
   }
 

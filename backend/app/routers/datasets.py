@@ -5,11 +5,13 @@ from app.database import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
 from app.schemas.dataset import (
+    AnalysisRecommendationResponse,
     CleaningReportResponse,
     CleanDatasetResponse,
     DatasetPreviewResponse,
     DatasetResponse,
 )
+from app.services.analysis_recommendation_service import get_analysis_recommendation
 from app.services.dataset_service import (
     clean_dataset,
     get_cleaning_report,
@@ -48,6 +50,22 @@ def preview_dataset_endpoint(
     current_user: User = Depends(get_current_user),
 ):
     return get_dataset_preview(
+        db=db,
+        dataset_id=dataset_id,
+        current_user=current_user,
+    )
+
+
+@router.get(
+    "/{dataset_id}/analysis-recommendation",
+    response_model=AnalysisRecommendationResponse,
+)
+def analysis_recommendation_endpoint(
+    dataset_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return get_analysis_recommendation(
         db=db,
         dataset_id=dataset_id,
         current_user=current_user,

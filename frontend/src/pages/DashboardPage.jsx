@@ -4,6 +4,7 @@ import {
   createAnalysisJob,
   generateAiExplanation,
   getAiExplanation,
+  getAnalysisRecommendation,
   getCleaningReport,
   getDatasetPreview,
   getAnalysisJobResult,
@@ -61,6 +62,74 @@ function chooseDefaultTargetColumn(preview) {
   if (best && best.score > 0) return best.name;
 
   return numericColumnsFromPreview(preview)[0] || columns[0] || "";
+}
+
+const VALID_TASK_TYPES = ["classification", "regression", "forecasting"];
+const RECOMMENDATION_UNAVAILABLE_MESSAGE = "Recommendation is unavailable. You can still choose columns manually.";
+
+function chooseDefaultDateColumn(preview, targetColumn) {
+  return (preview?.columns || []).find((column) => column !== targetColumn) || "";
+}
+
+function defaultJobFormFromPreview(preview) {
+  const targetColumn = chooseDefaultTargetColumn(preview);
+
+  return {
+    task_type: isNumericPreviewColumn(preview, targetColumn) ? "regression" : "classification",
+    target_column: targetColumn,
+    date_column: chooseDefaultDateColumn(preview, targetColumn)
+  };
+}
+
+function jobFormFromRecommendation(recommendation, preview) {
+  const fallback = defaultJobFormFromPreview(preview);
+  const columns = preview?.columns || [];
+  if (!recommendation || !columns.length) return fallback;
+
+  const taskType = VALID_TASK_TYPES.includes(recommendation.recommended_task_type)
+    ? recommendation.recommended_task_type
+    : fallback.task_type;
+  const targetColumn = columns.includes(recommendation.recommended_target_column)
+    ? recommendation.recommended_target_column
+    : fallback.target_column;
+  const recommendedDateColumn = recommendation.recommended_date_column;
+  const dateColumn = taskType === "forecasting" && columns.includes(recommendedDateColumn)
+    ? recommendedDateColumn
+    : taskType === "forecasting"
+      ? chooseDefaultDateColumn(preview, targetColumn)
+      : fallback.date_column;
+
+  return {
+    task_type: taskType,
+    target_column: targetColumn,
+    date_column: dateColumn === targetColumn ? chooseDefaultDateColumn(preview, targetColumn) : dateColumn
+  };
+}
+
+function formatTaskLabel(taskType) {
+  if (!taskType) return "Not available";
+  return `${taskType.charAt(0).toUpperCase()}${taskType.slice(1)}`;
+}
+
+function recommendationText(item, fallback = "Review this recommendation before creating the job.") {
+  if (typeof item === "string") return item;
+  if (item && typeof item === "object") {
+    return item.message || item.reason || item.code || fallback;
+  }
+  return fallback;
+}
+
+function recommendationTone(confidence) {
+  if (confidence === "high") return "ok";
+  if (confidence === "medium" || confidence === "low") return "warn";
+  return "neutral";
+}
+
+function healthTone(score) {
+  if (typeof score !== "number") return "neutral";
+  if (score >= 70) return "ok";
+  if (score >= 40) return "warn";
+  return "err";
 }
 
 function dashboardStats(dataset, cleaning, jobs) {
@@ -998,6 +1067,106 @@ function AnalysisDatasetSource({ cleanResult, dataset }) {
   );
 }
 
+function AnalysisRecommendationCard({ onUseRecommendation, recommendationState }) {
+  const { message, recommendation, status } = recommendationState;
+  if (status === "idle" && !recommendation) return null;
+
+  const reasons = Array.isArray(recommendation?.reasons) ? recommendation.reasons : [];
+  const warnings = Array.isArray(recommendation?.warnings) ? recommendation.warnings : [];
+  const alternatives = Array.isArray(recommendation?.alternatives) ? recommendation.alternatives : [];
+  const hasRecommendation = Boolean(recommendation);
+  const confidence = recommendation?.confidence || "manual";
+  const healthScore = recommendation?.health_score;
+
+  return (
+    <div className={`recommendation-panel ${status === "error" ? "unavailable" : ""}`}>
+      <div className="section-kicker">
+        <strong>Setup guidance</strong>
+        <Badge tone={hasRecommendation ? recommendationTone(confidence) : "neutral"}>
+          {status === "loading" ? "Checking" : confidence}
+        </Badge>
+      </div>
+
+      {status === "loading" ? (
+        <p className="muted">Checking the uploaded dataset for a recommended analysis setup...</p>
+      ) : hasRecommendation ? (
+        <>
+          <div className="recommendation-summary">
+            <div>
+              <span>Recommended</span>
+              <strong>{formatTaskLabel(recommendation.recommended_task_type)}</strong>
+            </div>
+            <div>
+              <span>Target</span>
+              <strong>{recommendation.recommended_target_column || "Not available"}</strong>
+            </div>
+            {recommendation.recommended_date_column ? (
+              <div>
+                <span>Date</span>
+                <strong>{recommendation.recommended_date_column}</strong>
+              </div>
+            ) : null}
+            <div>
+              <span>Health score</span>
+              <strong>
+                <Badge tone={healthTone(healthScore)}>
+                  {typeof healthScore === "number" ? `${healthScore}/100` : "Review"}
+                </Badge>
+              </strong>
+            </div>
+          </div>
+
+          <button className="button sm" onClick={onUseRecommendation} type="button">
+            Use recommendation
+          </button>
+
+          <div className="recommendation-detail-grid">
+            <div>
+              <strong>Why this fits</strong>
+              {reasons.length ? (
+                <ul>
+                  {reasons.map((reason, index) => (
+                    <li key={`${recommendationText(reason)}-${index}`}>{recommendationText(reason)}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="muted">No detailed reasons were returned.</p>
+              )}
+            </div>
+            <div>
+              <strong>{confidence === "low" ? "Review before running" : "Warnings"}</strong>
+              {warnings.length ? (
+                <ul>
+                  {warnings.map((warning, index) => (
+                    <li key={`${recommendationText(warning)}-${index}`}>{recommendationText(warning)}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="muted">No setup warnings were returned.</p>
+              )}
+            </div>
+          </div>
+
+          {alternatives.length ? (
+            <div className="recommendation-alternatives">
+              <strong>Alternatives</strong>
+              {alternatives.slice(0, 3).map((alternative, index) => (
+                <p key={`${alternative.task_type || "alternative"}-${alternative.target_column || index}`}>
+                  {formatTaskLabel(alternative.task_type)} · Target: {alternative.target_column || "Not available"}
+                  {alternative.date_column ? ` · Date: ${alternative.date_column}` : ""}
+                  {alternative.reason ? ` · ${alternative.reason}` : ""}
+                </p>
+              ))}
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <p className="muted">{message || RECOMMENDATION_UNAVAILABLE_MESSAGE}</p>
+      )}
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const {
     dashboardData,
@@ -1011,6 +1180,11 @@ export default function DashboardPage() {
   const [jobStatus, setJobStatus] = useState({ type: "idle", message: "" });
   const [runStatus, setRunStatus] = useState({ jobId: null, type: "idle", message: "" });
   const [modelResult, setModelResult] = useState(null);
+  const [recommendationState, setRecommendationState] = useState({
+    message: "",
+    recommendation: null,
+    status: "idle"
+  });
   const [aiExplanationState, setAiExplanationState] = useState({
     explanation: null,
     jobId: null,
@@ -1037,18 +1211,23 @@ export default function DashboardPage() {
     setJobStatus({ type: "idle", message: "" });
     setRunStatus({ jobId: null, type: "idle", message: "" });
     setModelResult(null);
+    setRecommendationState({ message: "", recommendation: null, status: "idle" });
     setAiExplanationState({ explanation: null, jobId: null, message: "", status: "idle" });
 
     try {
       const uploaded = await uploadDataset(file);
       setUpload((current) => ({ ...current, progress: 70 }));
-      const [nextPreview, nextCleaning, nextJobs] = await Promise.all([
+      setRecommendationState({ message: "", recommendation: null, status: "loading" });
+      const recommendationRequest = getAnalysisRecommendation(uploaded.id)
+        .then((recommendation) => ({ recommendation }))
+        .catch((error) => ({ error }));
+      const [nextPreview, nextCleaning, nextJobs, recommendationResult] = await Promise.all([
         getDatasetPreview(uploaded.id),
         getCleaningReport(uploaded.id),
-        listAnalysisJobs()
+        listAnalysisJobs(),
+        recommendationRequest
       ]);
-      const fallbackTarget = chooseDefaultTargetColumn(nextPreview);
-      const firstDateColumn = nextPreview.columns.find((column) => column !== fallbackTarget) || "";
+      const nextRecommendation = recommendationResult.recommendation || null;
 
       setDashboardData({
         cleanResult: null,
@@ -1057,11 +1236,20 @@ export default function DashboardPage() {
         preview: nextPreview
       });
       setJobs(nextJobs);
-      setJobForm({
-        task_type: isNumericPreviewColumn(nextPreview, fallbackTarget) ? "regression" : "classification",
-        target_column: fallbackTarget,
-        date_column: firstDateColumn
-      });
+      setJobForm(nextRecommendation
+        ? jobFormFromRecommendation(nextRecommendation, nextPreview)
+        : defaultJobFormFromPreview(nextPreview));
+      setRecommendationState(recommendationResult.error
+        ? {
+          message: RECOMMENDATION_UNAVAILABLE_MESSAGE,
+          recommendation: null,
+          status: "error"
+        }
+        : {
+          message: "",
+          recommendation: nextRecommendation,
+          status: "success"
+        });
       setUpload({
         status: "done",
         file: uploaded.file_name,
@@ -1075,7 +1263,13 @@ export default function DashboardPage() {
         progress: 0,
         message: error.message || "Upload failed"
       });
+      setRecommendationState({ message: "", recommendation: null, status: "idle" });
     }
+  }
+
+  function handleUseRecommendation() {
+    if (!recommendationState.recommendation || !preview) return;
+    setJobForm(jobFormFromRecommendation(recommendationState.recommendation, preview));
   }
 
   async function handleCleanDataset() {
@@ -1277,6 +1471,10 @@ export default function DashboardPage() {
             <Badge tone={jobs.length ? "ok" : "neutral"}>{jobs.length} jobs</Badge>
           </div>
           <AnalysisDatasetSource cleanResult={cleanResult} dataset={dataset} />
+          <AnalysisRecommendationCard
+            onUseRecommendation={handleUseRecommendation}
+            recommendationState={recommendationState}
+          />
           <form className="analysis-form" onSubmit={handleCreateJob}>
             <label>
               <span>Analysis type</span>

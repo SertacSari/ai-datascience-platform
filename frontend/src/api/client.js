@@ -106,6 +106,14 @@ export async function getCleaningReport(datasetId) {
   );
 }
 
+export async function getAnalysisRecommendation(datasetId) {
+  return parseResponse(
+    await fetch(`${API_BASE_URL}/datasets/${datasetId}/analysis-recommendation`, {
+      credentials: "include"
+    })
+  );
+}
+
 export async function cleanDataset(datasetId) {
   return parseResponse(
     await fetch(`${API_BASE_URL}/datasets/${datasetId}/clean`, {
