@@ -3,8 +3,11 @@ import {
   cleanDataset,
   createAnalysisJob,
   generateAiExplanation,
+  generateAnalysisReport,
   getAiExplanation,
   getAnalysisRecommendation,
+  getAnalysisReport,
+  getAnalysisReportDownloadUrl,
   getCleaningReport,
   getDatasetPreview,
   getAnalysisJobResult,
@@ -594,6 +597,14 @@ function aiExplanationErrorMessage(error) {
   return error?.message || "Could not load the local AI explanation.";
 }
 
+function reportErrorMessage(error) {
+  if (error?.status === 401) {
+    return "Your session expired. Please log in again.";
+  }
+
+  return "Report could not be generated. The saved result is still available.";
+}
+
 function LocalAiExplanationSection({ aiExplanationState, jobId, onGenerate }) {
   if (!jobId) return null;
 
@@ -622,7 +633,60 @@ function LocalAiExplanationSection({ aiExplanationState, jobId, onGenerate }) {
   );
 }
 
-function ClassificationResultCard({ aiExplanationState, onGenerateAiExplanation, result }) {
+function AnalysisReportSection({ jobId, onGenerateReport, reportState }) {
+  if (!jobId) return null;
+
+  const isCurrentJob = reportState?.jobId === jobId;
+  const status = isCurrentJob ? reportState.status : "idle";
+  const report = isCurrentJob ? reportState.report : null;
+  const message = isCurrentJob ? reportState.message : "";
+  const isLoading = status === "loading";
+
+  return (
+    <div className={`result-warning-panel ${status === "error" ? "has-warnings" : "clear"}`}>
+      <div className="result-interpretation-head">
+        <strong>Analysis report</strong>
+        <span className="badge neutral llm-model-badge">{report?.report_type || "HTML"}</span>
+      </div>
+      <p>Generate a saved HTML report from this completed model result.</p>
+      {report ? (
+        <>
+          <div className="report-meta-grid">
+            <div>
+              <span>File name</span>
+              <strong title={report.file_name}>{report.file_name || "HTML report"}</strong>
+            </div>
+            <div>
+              <span>Status</span>
+              <strong>{report.status || "ready"}</strong>
+            </div>
+          </div>
+          <a
+            className="button sm"
+            href={getAnalysisReportDownloadUrl(jobId)}
+            rel="noreferrer"
+            target="_blank"
+          >
+            Download HTML
+          </a>
+        </>
+      ) : (
+        <button className="button sm" disabled={isLoading} onClick={() => onGenerateReport(jobId)} type="button">
+          {isLoading ? "Generating..." : "Generate report"}
+        </button>
+      )}
+      {message ? <p>{message}</p> : null}
+    </div>
+  );
+}
+
+function ClassificationResultCard({
+  aiExplanationState,
+  onGenerateAiExplanation,
+  onGenerateReport,
+  reportState,
+  result
+}) {
   const modelResult = result?.model_result || result;
   if (!modelResult) return null;
 
@@ -680,6 +744,12 @@ function ClassificationResultCard({ aiExplanationState, onGenerateAiExplanation,
         aiExplanationState={aiExplanationState}
         jobId={result?.job?.id}
         onGenerate={onGenerateAiExplanation}
+      />
+
+      <AnalysisReportSection
+        jobId={result?.job?.id}
+        onGenerateReport={onGenerateReport}
+        reportState={reportState}
       />
 
       <div className="result-block">
@@ -763,7 +833,13 @@ function ClassificationResultCard({ aiExplanationState, onGenerateAiExplanation,
   );
 }
 
-function RegressionResultCard({ aiExplanationState, onGenerateAiExplanation, result }) {
+function RegressionResultCard({
+  aiExplanationState,
+  onGenerateAiExplanation,
+  onGenerateReport,
+  reportState,
+  result
+}) {
   const modelResult = result?.model_result || result;
   if (!modelResult) return null;
 
@@ -811,6 +887,12 @@ function RegressionResultCard({ aiExplanationState, onGenerateAiExplanation, res
         aiExplanationState={aiExplanationState}
         jobId={result?.job?.id}
         onGenerate={onGenerateAiExplanation}
+      />
+
+      <AnalysisReportSection
+        jobId={result?.job?.id}
+        onGenerateReport={onGenerateReport}
+        reportState={reportState}
       />
 
       <div className="result-block">
@@ -883,7 +965,13 @@ function RegressionResultCard({ aiExplanationState, onGenerateAiExplanation, res
   );
 }
 
-function ForecastingResultCard({ aiExplanationState, onGenerateAiExplanation, result }) {
+function ForecastingResultCard({
+  aiExplanationState,
+  onGenerateAiExplanation,
+  onGenerateReport,
+  reportState,
+  result
+}) {
   const modelResult = result?.model_result || result;
   if (!modelResult) return null;
 
@@ -932,6 +1020,12 @@ function ForecastingResultCard({ aiExplanationState, onGenerateAiExplanation, re
         aiExplanationState={aiExplanationState}
         jobId={result?.job?.id}
         onGenerate={onGenerateAiExplanation}
+      />
+
+      <AnalysisReportSection
+        jobId={result?.job?.id}
+        onGenerateReport={onGenerateReport}
+        reportState={reportState}
       />
 
       <div className="result-block">
@@ -1034,7 +1128,13 @@ function ForecastingResultCard({ aiExplanationState, onGenerateAiExplanation, re
   );
 }
 
-function ModelResultCard({ aiExplanationState, onGenerateAiExplanation, result }) {
+function ModelResultCard({
+  aiExplanationState,
+  onGenerateAiExplanation,
+  onGenerateReport,
+  reportState,
+  result
+}) {
   if (!result) return null;
   const taskType = result.job?.task_type;
   const modelResult = result.model_result || result;
@@ -1045,6 +1145,8 @@ function ModelResultCard({ aiExplanationState, onGenerateAiExplanation, result }
       <ForecastingResultCard
         aiExplanationState={aiExplanationState}
         onGenerateAiExplanation={onGenerateAiExplanation}
+        onGenerateReport={onGenerateReport}
+        reportState={reportState}
         result={result}
       />
     );
@@ -1055,6 +1157,8 @@ function ModelResultCard({ aiExplanationState, onGenerateAiExplanation, result }
       <RegressionResultCard
         aiExplanationState={aiExplanationState}
         onGenerateAiExplanation={onGenerateAiExplanation}
+        onGenerateReport={onGenerateReport}
+        reportState={reportState}
         result={result}
       />
     );
@@ -1064,6 +1168,8 @@ function ModelResultCard({ aiExplanationState, onGenerateAiExplanation, result }
     <ClassificationResultCard
       aiExplanationState={aiExplanationState}
       onGenerateAiExplanation={onGenerateAiExplanation}
+      onGenerateReport={onGenerateReport}
+      reportState={reportState}
       result={result}
     />
   );
@@ -1315,6 +1421,12 @@ export default function DashboardPage() {
     message: "",
     status: "idle"
   });
+  const [reportState, setReportState] = useState({
+    jobId: null,
+    message: "",
+    report: null,
+    status: "idle"
+  });
   const { cleanResult, cleaning, dataset, preview } = dashboardData;
   const stats = dashboardStats(dataset, cleaning, jobs);
   const technical = technicalFromBackend(cleaning, preview);
@@ -1337,6 +1449,7 @@ export default function DashboardPage() {
     setModelResult(null);
     setRecommendationState({ message: "", recommendation: null, status: "idle" });
     setAiExplanationState({ explanation: null, jobId: null, message: "", status: "idle" });
+    setReportState({ jobId: null, message: "", report: null, status: "idle" });
 
     try {
       const uploaded = await uploadDataset(file);
@@ -1440,6 +1553,7 @@ export default function DashboardPage() {
     setRunStatus({ jobId: job.id, type: "loading", message: `Running ${job.task_type} job #${job.id}...` });
     setModelResult(null);
     setAiExplanationState({ explanation: null, jobId: job.id, message: "", status: "idle" });
+    setReportState({ jobId: job.id, message: "", report: null, status: "idle" });
     try {
       const result = await runAnalysisJob(job.id);
       const nextJobs = await listAnalysisJobs();
@@ -1469,6 +1583,12 @@ export default function DashboardPage() {
       message: "Checking for saved local AI explanation...",
       status: "loading"
     });
+    setReportState({
+      jobId: job.id,
+      message: "Checking for saved HTML report...",
+      report: null,
+      status: "loading"
+    });
     try {
       const savedModelResult = await getAnalysisJobResult(job.id);
       setModelResult({ job, model_result: savedModelResult });
@@ -1494,8 +1614,26 @@ export default function DashboardPage() {
           status: error.status === 404 ? "idle" : "error"
         });
       }
+
+      try {
+        const cachedReport = await getAnalysisReport(job.id);
+        setReportState({
+          jobId: job.id,
+          message: "Loaded saved HTML report metadata.",
+          report: cachedReport,
+          status: "success"
+        });
+      } catch (error) {
+        setReportState({
+          jobId: job.id,
+          message: error.status === 404 ? "" : reportErrorMessage(error),
+          report: null,
+          status: error.status === 404 ? "idle" : "error"
+        });
+      }
     } catch (error) {
       setAiExplanationState({ explanation: null, jobId: job.id, message: "", status: "idle" });
+      setReportState({ jobId: job.id, message: "", report: null, status: "idle" });
       setRunStatus({
         jobId: job.id,
         type: "error",
@@ -1525,6 +1663,32 @@ export default function DashboardPage() {
         explanation: current.jobId === jobId ? current.explanation : null,
         jobId,
         message: aiExplanationErrorMessage(error),
+        status: "error"
+      }));
+    }
+  }
+
+  async function handleGenerateReport(jobId) {
+    setReportState((current) => ({
+      jobId,
+      message: "Generating HTML report...",
+      report: current.jobId === jobId ? current.report : null,
+      status: "loading"
+    }));
+
+    try {
+      const report = await generateAnalysisReport(jobId);
+      setReportState({
+        jobId,
+        message: "HTML report is ready.",
+        report,
+        status: "success"
+      });
+    } catch (error) {
+      setReportState((current) => ({
+        jobId,
+        message: reportErrorMessage(error),
+        report: current.jobId === jobId ? current.report : null,
         status: "error"
       }));
     }
@@ -1716,6 +1880,8 @@ export default function DashboardPage() {
         <ModelResultCard
           aiExplanationState={aiExplanationState}
           onGenerateAiExplanation={handleGenerateAiExplanation}
+          onGenerateReport={handleGenerateReport}
+          reportState={reportState}
           result={modelResult}
         />
         <DatasetPreviewCard dataset={dataset} preview={preview} />

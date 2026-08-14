@@ -53,3 +53,14 @@ class AIExplanationResponse(BaseModel):
     llm_model: str
     explanation_text: str
     created_at: datetime
+
+
+class AnalysisReportResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    analysis_id: int
+    report_type: str
+    status: str
+    file_name: str
+    created_at: datetime

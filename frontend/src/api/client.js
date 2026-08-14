@@ -160,6 +160,27 @@ export async function getAiExplanation(jobId) {
   );
 }
 
+export async function generateAnalysisReport(jobId) {
+  return parseResponse(
+    await fetch(`${API_BASE_URL}/analysis/jobs/${jobId}/report`, {
+      method: "POST",
+      credentials: "include"
+    })
+  );
+}
+
+export async function getAnalysisReport(jobId) {
+  return parseResponse(
+    await fetch(`${API_BASE_URL}/analysis/jobs/${jobId}/report`, {
+      credentials: "include"
+    })
+  );
+}
+
+export function getAnalysisReportDownloadUrl(jobId) {
+  return `${API_BASE_URL}/analysis/jobs/${jobId}/report/download`;
+}
+
 export async function getAnalysisJobResult(jobId) {
   return parseResponse(
     await fetch(`${API_BASE_URL}/analysis/jobs/${jobId}/result`, {

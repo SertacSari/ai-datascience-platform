@@ -410,6 +410,9 @@ small {
 }
 
 .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 36px;
   border: 1px solid var(--border);
   border-radius: 5px;
@@ -417,6 +420,7 @@ small {
   color: var(--ink);
   background: var(--card);
   font-weight: 900;
+  text-decoration: none;
 }
 
 .button.sm {
@@ -1241,6 +1245,37 @@ small {
   overflow-wrap: anywhere;
 }
 
+.report-meta-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(90px, .6fr);
+  gap: 8px;
+}
+
+.report-meta-grid div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  background: var(--card);
+}
+
+.report-meta-grid span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+
+.report-meta-grid strong {
+  overflow: hidden;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .metric-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1814,6 +1849,10 @@ small {
   }
 
   .metric-summary-grid.count-3 {
+    grid-template-columns: 1fr;
+  }
+
+  .report-meta-grid {
     grid-template-columns: 1fr;
   }
 
