@@ -3,7 +3,11 @@ import {
   cleanDataset,
   createAnalysisJob,
   generateAiExplanation,
+  generateAnalysisReport,
   getAiExplanation,
+  getAnalysisRecommendation,
+  getAnalysisReport,
+  getAnalysisReportDownloadUrl,
   getCleaningReport,
   getDatasetPreview,
   getAnalysisJobResult,
@@ -14,8 +18,6 @@ import {
 import AiSummaryCard from "../components/AiSummaryCard";
 import Badge from "../components/Badge";
 import Dropzone from "../components/Dropzone";
-import LineChart from "../components/LineChart";
-import Segmented from "../components/Segmented";
 import StatCard from "../components/StatCard";
 import { emptyDashboardData, useSession } from "../context/SessionContext";
 import { statRows, technicalRows } from "../lib/dashboardSamples";
@@ -24,6 +26,132 @@ function numericColumnsFromPreview(preview) {
   return (preview?.column_info || [])
     .filter((column) => /int|float|double|decimal|number/i.test(column.dtype))
     .map((column) => column.name);
+}
+
+function isNumericPreviewColumn(preview, columnName) {
+  return numericColumnsFromPreview(preview).includes(columnName);
+}
+
+function scoreTargetCandidate(columnName, dtype = "") {
+  const normalized = String(columnName).toLowerCase();
+  const normalizedType = String(dtype).toLowerCase();
+  let score = 0;
+
+  if (/(target|label|outcome|result|class)$/i.test(normalized)) score += 35;
+  if (/(churn|churned|left|default|approved|fraud|status)$/i.test(normalized)) score += 32;
+  if (/(sale_price|price|revenue|sales|amount|cost|value)$/i.test(normalized)) score += 30;
+  if (/(score|rating|demand|quantity|total)$/i.test(normalized)) score += 18;
+  if (/id$|^id$|uuid|index|row|code|zip|postal/i.test(normalized)) score -= 35;
+  if (/int|float|double|decimal|number/i.test(normalizedType)) score += 6;
+
+  return score;
+}
+
+function chooseDefaultTargetColumn(preview) {
+  const columns = preview?.columns || [];
+  const columnInfo = preview?.column_info || [];
+  if (!columns.length) return "";
+
+  const candidates = columns.map((name, index) => {
+    const info = columnInfo.find((column) => column.name === name) || {};
+    return {
+      index,
+      name,
+      score: scoreTargetCandidate(name, info.dtype)
+    };
+  });
+
+  const best = candidates.sort((a, b) => b.score - a.score || b.index - a.index)[0];
+  if (best && best.score > 0) return best.name;
+
+  return numericColumnsFromPreview(preview)[0] || columns[0] || "";
+}
+
+const VALID_TASK_TYPES = ["classification", "regression", "forecasting"];
+const RECOMMENDATION_UNAVAILABLE_MESSAGE = "Recommendation is unavailable. You can still choose columns manually.";
+
+function chooseDefaultDateColumn(preview, targetColumn) {
+  return (preview?.columns || []).find((column) => column !== targetColumn) || "";
+}
+
+function defaultJobFormFromPreview(preview) {
+  const targetColumn = chooseDefaultTargetColumn(preview);
+
+  return {
+    task_type: isNumericPreviewColumn(preview, targetColumn) ? "regression" : "classification",
+    target_column: targetColumn,
+    date_column: chooseDefaultDateColumn(preview, targetColumn)
+  };
+}
+
+function jobFormFromRecommendation(recommendation, preview) {
+  const fallback = defaultJobFormFromPreview(preview);
+  const columns = preview?.columns || [];
+  if (!recommendation || !columns.length) return fallback;
+
+  const taskType = VALID_TASK_TYPES.includes(recommendation.recommended_task_type)
+    ? recommendation.recommended_task_type
+    : fallback.task_type;
+  const targetColumn = columns.includes(recommendation.recommended_target_column)
+    ? recommendation.recommended_target_column
+    : fallback.target_column;
+  const recommendedDateColumn = recommendation.recommended_date_column;
+  const dateColumn = taskType === "forecasting" && columns.includes(recommendedDateColumn)
+    ? recommendedDateColumn
+    : taskType === "forecasting"
+      ? chooseDefaultDateColumn(preview, targetColumn)
+      : fallback.date_column;
+
+  return {
+    task_type: taskType,
+    target_column: targetColumn,
+    date_column: dateColumn === targetColumn ? chooseDefaultDateColumn(preview, targetColumn) : dateColumn
+  };
+}
+
+function formatTaskLabel(taskType) {
+  if (!taskType) return "Not available";
+  return `${taskType.charAt(0).toUpperCase()}${taskType.slice(1)}`;
+}
+
+function recommendationText(item, fallback = "Review this recommendation before creating the job.") {
+  if (typeof item === "string") return item;
+  if (item && typeof item === "object") {
+    return item.message || item.reason || item.code || fallback;
+  }
+  return fallback;
+}
+
+function recommendationTone(confidence) {
+  if (confidence === "high") return "ok";
+  if (confidence === "medium" || confidence === "low") return "warn";
+  return "neutral";
+}
+
+function healthTone(score) {
+  if (typeof score !== "number") return "neutral";
+  if (score >= 70) return "ok";
+  if (score >= 40) return "warn";
+  return "err";
+}
+
+function severityTone(severity) {
+  if (severity === "high") return "err";
+  if (severity === "medium") return "warn";
+  if (severity === "low") return "neutral";
+  return "neutral";
+}
+
+function formatRoleLabel(role) {
+  if (!role) return "Column";
+  return role
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function compactGuidanceItems(items, limit) {
+  return Array.isArray(items) ? items.slice(0, limit) : [];
 }
 
 function dashboardStats(dataset, cleaning, jobs) {
@@ -55,6 +183,196 @@ function technicalFromBackend(cleaning, preview) {
     ["Categorical columns", categorical, "Normal", "ok"],
     ["Preview rows", preview?.preview?.length || 0, preview ? "Loaded" : "Review", preview ? "ok" : "warn"]
   ];
+}
+
+function columnTypeCounts(preview) {
+  return (preview?.column_info || []).reduce(
+    (counts, column) => {
+      if (/int|float|double|decimal|number/i.test(column.dtype)) counts.numeric += 1;
+      else if (/date|time/i.test(column.dtype)) counts.datetime += 1;
+      else counts.categorical += 1;
+      return counts;
+    },
+    { categorical: 0, datetime: 0, numeric: 0 }
+  );
+}
+
+function topMissingColumns(cleaning, preview) {
+  const missingValues = cleaning?.missing_values || {};
+  const fromCleaning = Object.entries(missingValues)
+    .map(([name, count]) => ({ count, name }))
+    .filter((column) => column.count > 0);
+
+  const fromPreview = (preview?.column_info || [])
+    .map((column) => ({ count: column.missing_count, name: column.name }))
+    .filter((column) => column.count > 0);
+
+  return (fromCleaning.length ? fromCleaning : fromPreview)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 4);
+}
+
+function prioritizedNumericColumns(preview, targetColumn) {
+  const numericColumns = numericColumnsFromPreview(preview);
+  if (!numericColumns.length) return [];
+
+  if (targetColumn && numericColumns.includes(targetColumn)) {
+    return [targetColumn, ...numericColumns.filter((column) => column !== targetColumn)];
+  }
+
+  return numericColumns;
+}
+
+function numericSummaryRows(preview, targetColumn) {
+  const statistics = preview?.summary_statistics || {};
+
+  return prioritizedNumericColumns(preview, targetColumn)
+    .map((columnName) => {
+      const stats = statistics[columnName] || {};
+      return {
+        max: stats.max,
+        mean: stats.mean,
+        min: stats.min,
+        name: columnName
+      };
+    })
+    .filter((column) => [column.min, column.mean, column.max].some((value) => typeof value === "number"))
+    .slice(0, 3);
+}
+
+function previewDistribution(preview, targetColumn) {
+  const numericColumn = isNumericPreviewColumn(preview, targetColumn)
+    ? targetColumn
+    : numericColumnsFromPreview(preview)[0];
+  if (!numericColumn) return null;
+
+  const values = (preview?.preview || [])
+    .map((row) => Number(row[numericColumn]))
+    .filter((value) => Number.isFinite(value));
+  if (!values.length) return null;
+
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+  const range = max - min || 1;
+
+  return {
+    column: numericColumn,
+    values: values.slice(0, 10).map((value) => ({
+      height: Math.max(8, Math.round(((value - min) / range) * 58) + 8),
+      value
+    }))
+  };
+}
+
+function DatasetInsightsCard({ cleaning, dataset, preview, targetColumn }) {
+  const typeCounts = columnTypeCounts(preview);
+  const missingColumns = topMissingColumns(cleaning, preview);
+  const numericRows = numericSummaryRows(preview, targetColumn);
+  const distribution = previewDistribution(preview, targetColumn);
+  const duplicateRows = cleaning?.duplicate_rows ?? preview?.duplicate_rows ?? 0;
+  const targetIsNumeric = isNumericPreviewColumn(preview, targetColumn);
+
+  return (
+    <section className="card insights-card">
+      <div className="card-head">
+        <div>
+          <p className="eyebrow">Dataset insights</p>
+          <h2>{dataset ? "Target-aware profile" : "Waiting for dataset"}</h2>
+        </div>
+        <Badge tone={dataset ? duplicateRows ? "warn" : "ok" : "neutral"}>
+          {dataset ? `${dataset.column_count} columns` : "No data"}
+        </Badge>
+      </div>
+
+      {dataset && preview ? (
+        <>
+          <div className="insight-summary-grid">
+            <div>
+              <span>Rows</span>
+              <strong>{dataset.row_count.toLocaleString()}</strong>
+              <small>Uploaded dataset</small>
+            </div>
+            <div>
+              <span>Duplicates</span>
+              <strong>{duplicateRows.toLocaleString()}</strong>
+              <small>{duplicateRows ? "Review before modeling" : "No duplicate rows found"}</small>
+            </div>
+            <div>
+              <span>Selected target</span>
+              <strong>{targetColumn || "Not selected"}</strong>
+              <small>{targetIsNumeric ? "Numeric target" : "Choose target in analysis request"}</small>
+            </div>
+            <div>
+              <span>Column mix</span>
+              <strong>{typeCounts.numeric} num / {typeCounts.categorical} cat</strong>
+              <small>{typeCounts.datetime ? `${typeCounts.datetime} date-like` : "Based on backend dtypes"}</small>
+            </div>
+          </div>
+
+          <div className="insight-split">
+            <div className="insight-panel">
+              <strong>Missing values by column</strong>
+              {missingColumns.length ? (
+                <div className="insight-bars">
+                  {missingColumns.map((column) => {
+                    const width = Math.max(8, Math.round((column.count / dataset.row_count) * 100));
+                    return (
+                      <div className="insight-bar-row" key={column.name}>
+                        <span title={column.name}>{column.name}</span>
+                        <div><i style={{ width: `${Math.min(width, 100)}%` }} /></div>
+                        <em>{column.count.toLocaleString()}</em>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="muted">No missing values were returned for the uploaded dataset.</p>
+              )}
+            </div>
+
+            <div className="insight-panel">
+              <strong>Preview distribution</strong>
+              {distribution ? (
+                <>
+                  <div className="mini-distribution" aria-label={`Preview distribution for ${distribution.column}`}>
+                    {distribution.values.map((item, index) => (
+                      <i key={`${item.value}-${index}`} style={{ height: `${item.height}px` }} title={formatNumberMetric(item.value)} />
+                    ))}
+                  </div>
+                  <p className="muted">
+                    {distribution.column}{distribution.column === targetColumn ? " target" : ""} from visible preview rows
+                  </p>
+                </>
+              ) : (
+                <p className="muted">Upload data with numeric preview values to show a small distribution.</p>
+              )}
+            </div>
+          </div>
+
+          <div className="numeric-summary-list">
+            <strong>Important numeric columns</strong>
+            {numericRows.length ? (
+              numericRows.map((column) => (
+                <div key={column.name}>
+                  <span title={column.name}>{column.name}</span>
+                  <small>Min {formatNumberMetric(column.min)}</small>
+                  <small>Mean {formatNumberMetric(column.mean)}</small>
+                  <small>Max {formatNumberMetric(column.max)}</small>
+                </div>
+              ))
+            ) : (
+              <p className="muted">No numeric summary statistics were returned.</p>
+            )}
+          </div>
+        </>
+      ) : (
+        <div className="empty-insights">
+          <strong>No dataset loaded</strong>
+          <p>Upload a CSV or Excel file to see real column mix, missing values, duplicate rows, and preview-based numeric signals.</p>
+        </div>
+      )}
+    </section>
+  );
 }
 
 function DatasetPreviewCard({ dataset, preview }) {
@@ -96,6 +414,67 @@ function DatasetPreviewCard({ dataset, preview }) {
             ))}
           </tbody>
         </table>
+      </div>
+    </section>
+  );
+}
+
+function WorkflowStatusCard({ dataset, jobForm, jobs, modelResult, recommendationState, reportState, stats }) {
+  const recommendation = recommendationState.recommendation;
+  const hasCreatedJob = jobs.some((job) => job.status === "created");
+  const hasCompletedJob = jobs.some((job) => job.status === "completed");
+  const nextAction = !dataset
+    ? "Upload a CSV or Excel file to start."
+    : !modelResult && hasCreatedJob
+      ? "Run a created job from Recent jobs."
+      : !modelResult && hasCompletedJob
+        ? "Open a completed result from Recent jobs."
+        : !modelResult
+          ? "Review the setup, then create an analysis request."
+          : reportState.report
+            ? "Download the HTML report or review the saved result."
+            : "Generate an HTML report from Optional outputs.";
+
+  const workflowSteps = [
+    ["Upload", dataset ? "ok" : "warn"],
+    ["Understand", recommendation ? "ok" : dataset ? "warn" : "neutral"],
+    ["Run", modelResult || hasCompletedJob ? "ok" : jobs.length ? "warn" : "neutral"],
+    ["Export", reportState.report ? "ok" : modelResult ? "warn" : "neutral"]
+  ];
+
+  return (
+    <section className="card workflow-status-card">
+      <div className="card-head">
+        <div>
+          <p className="eyebrow">Workflow</p>
+          <h2>{dataset ? dataset.file_name : "No dataset loaded"}</h2>
+        </div>
+        <Badge tone={modelResult ? "ok" : dataset ? "warn" : "neutral"}>
+          {modelResult ? "Result ready" : dataset ? "Setup" : "Start"}
+        </Badge>
+      </div>
+      <div className="workflow-steps" aria-label="Analysis workflow status">
+        {workflowSteps.map(([label, tone]) => (
+          <span className={tone} key={label}>{label}</span>
+        ))}
+      </div>
+      <div className="workflow-next">
+        <div>
+          <span>Recommended setup</span>
+          <strong>
+            {recommendation
+              ? `${formatTaskLabel(recommendation.recommended_task_type)} / ${recommendation.recommended_target_column}`
+              : dataset
+                ? `${formatTaskLabel(jobForm.task_type)} / ${jobForm.target_column || "choose target"}`
+                : "Waiting for upload"}
+          </strong>
+        </div>
+        <p>{nextAction}</p>
+      </div>
+      <div className="workflow-kpis">
+        {stats.map(([label, value, delta, tone]) => (
+          <StatCard delta={delta} key={label} label={label} tone={tone} value={value} />
+        ))}
       </div>
     </section>
   );
@@ -279,6 +658,14 @@ function aiExplanationErrorMessage(error) {
   return error?.message || "Could not load the local AI explanation.";
 }
 
+function reportErrorMessage(error) {
+  if (error?.status === 401) {
+    return "Your session expired. Please log in again.";
+  }
+
+  return "Report could not be generated. The saved result is still available.";
+}
+
 function LocalAiExplanationSection({ aiExplanationState, jobId, onGenerate }) {
   if (!jobId) return null;
 
@@ -307,7 +694,91 @@ function LocalAiExplanationSection({ aiExplanationState, jobId, onGenerate }) {
   );
 }
 
-function ClassificationResultCard({ aiExplanationState, onGenerateAiExplanation, result }) {
+function AnalysisReportSection({ jobId, onGenerateReport, reportState }) {
+  if (!jobId) return null;
+
+  const isCurrentJob = reportState?.jobId === jobId;
+  const status = isCurrentJob ? reportState.status : "idle";
+  const report = isCurrentJob ? reportState.report : null;
+  const message = isCurrentJob ? reportState.message : "";
+  const isLoading = status === "loading";
+
+  return (
+    <div className={`result-warning-panel ${status === "error" ? "has-warnings" : "clear"}`}>
+      <div className="result-interpretation-head">
+        <strong>Analysis report</strong>
+        <span className="badge neutral llm-model-badge">{report?.report_type || "HTML"}</span>
+      </div>
+      <p>Generate a saved HTML report from this completed model result.</p>
+      {report ? (
+        <>
+          <div className="report-meta-grid">
+            <div>
+              <span>File name</span>
+              <strong title={report.file_name}>{report.file_name || "HTML report"}</strong>
+            </div>
+            <div>
+              <span>Status</span>
+              <strong>{report.status || "ready"}</strong>
+            </div>
+          </div>
+          <a
+            className="button sm"
+            href={getAnalysisReportDownloadUrl(jobId)}
+            rel="noreferrer"
+            target="_blank"
+          >
+            Download HTML
+          </a>
+        </>
+      ) : (
+        <button className="button sm" disabled={isLoading} onClick={() => onGenerateReport(jobId)} type="button">
+          {isLoading ? "Generating..." : "Generate report"}
+        </button>
+      )}
+      {message ? <p>{message}</p> : null}
+    </div>
+  );
+}
+
+function ResultActionStack({
+  aiExplanationState,
+  jobId,
+  onGenerateAiExplanation,
+  onGenerateReport,
+  reportState
+}) {
+  if (!jobId) return null;
+
+  return (
+    <div className="result-action-stack">
+      <div className="section-kicker">
+        <strong>Optional outputs</strong>
+        <span>local explanation and HTML report</span>
+      </div>
+      <div className="result-action-grid">
+        <LocalAiExplanationSection
+          aiExplanationState={aiExplanationState}
+          jobId={jobId}
+          onGenerate={onGenerateAiExplanation}
+        />
+        <AnalysisReportSection
+          jobId={jobId}
+          onGenerateReport={onGenerateReport}
+          reportState={reportState}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ClassificationResultCard({
+  aiExplanationState,
+  onGenerateAiExplanation,
+  onGenerateReport,
+  reportState,
+  result
+}) {
   const modelResult = result?.model_result || result;
   if (!modelResult) return null;
 
@@ -361,10 +832,12 @@ function ClassificationResultCard({ aiExplanationState, onGenerateAiExplanation,
 
       <ResultRecommendedActions actions={recommendedActions} />
 
-      <LocalAiExplanationSection
+      <ResultActionStack
         aiExplanationState={aiExplanationState}
         jobId={result?.job?.id}
-        onGenerate={onGenerateAiExplanation}
+        onGenerateAiExplanation={onGenerateAiExplanation}
+        onGenerateReport={onGenerateReport}
+        reportState={reportState}
       />
 
       <div className="result-block">
@@ -448,7 +921,13 @@ function ClassificationResultCard({ aiExplanationState, onGenerateAiExplanation,
   );
 }
 
-function RegressionResultCard({ aiExplanationState, onGenerateAiExplanation, result }) {
+function RegressionResultCard({
+  aiExplanationState,
+  onGenerateAiExplanation,
+  onGenerateReport,
+  reportState,
+  result
+}) {
   const modelResult = result?.model_result || result;
   if (!modelResult) return null;
 
@@ -492,10 +971,12 @@ function RegressionResultCard({ aiExplanationState, onGenerateAiExplanation, res
 
       <ResultRecommendedActions actions={recommendedActions} />
 
-      <LocalAiExplanationSection
+      <ResultActionStack
         aiExplanationState={aiExplanationState}
         jobId={result?.job?.id}
-        onGenerate={onGenerateAiExplanation}
+        onGenerateAiExplanation={onGenerateAiExplanation}
+        onGenerateReport={onGenerateReport}
+        reportState={reportState}
       />
 
       <div className="result-block">
@@ -568,7 +1049,13 @@ function RegressionResultCard({ aiExplanationState, onGenerateAiExplanation, res
   );
 }
 
-function ForecastingResultCard({ aiExplanationState, onGenerateAiExplanation, result }) {
+function ForecastingResultCard({
+  aiExplanationState,
+  onGenerateAiExplanation,
+  onGenerateReport,
+  reportState,
+  result
+}) {
   const modelResult = result?.model_result || result;
   if (!modelResult) return null;
 
@@ -613,10 +1100,12 @@ function ForecastingResultCard({ aiExplanationState, onGenerateAiExplanation, re
 
       <ResultRecommendedActions actions={recommendedActions} />
 
-      <LocalAiExplanationSection
+      <ResultActionStack
         aiExplanationState={aiExplanationState}
         jobId={result?.job?.id}
-        onGenerate={onGenerateAiExplanation}
+        onGenerateAiExplanation={onGenerateAiExplanation}
+        onGenerateReport={onGenerateReport}
+        reportState={reportState}
       />
 
       <div className="result-block">
@@ -719,7 +1208,13 @@ function ForecastingResultCard({ aiExplanationState, onGenerateAiExplanation, re
   );
 }
 
-function ModelResultCard({ aiExplanationState, onGenerateAiExplanation, result }) {
+function ModelResultCard({
+  aiExplanationState,
+  onGenerateAiExplanation,
+  onGenerateReport,
+  reportState,
+  result
+}) {
   if (!result) return null;
   const taskType = result.job?.task_type;
   const modelResult = result.model_result || result;
@@ -730,6 +1225,8 @@ function ModelResultCard({ aiExplanationState, onGenerateAiExplanation, result }
       <ForecastingResultCard
         aiExplanationState={aiExplanationState}
         onGenerateAiExplanation={onGenerateAiExplanation}
+        onGenerateReport={onGenerateReport}
+        reportState={reportState}
         result={result}
       />
     );
@@ -740,6 +1237,8 @@ function ModelResultCard({ aiExplanationState, onGenerateAiExplanation, result }
       <RegressionResultCard
         aiExplanationState={aiExplanationState}
         onGenerateAiExplanation={onGenerateAiExplanation}
+        onGenerateReport={onGenerateReport}
+        reportState={reportState}
         result={result}
       />
     );
@@ -749,6 +1248,8 @@ function ModelResultCard({ aiExplanationState, onGenerateAiExplanation, result }
     <ClassificationResultCard
       aiExplanationState={aiExplanationState}
       onGenerateAiExplanation={onGenerateAiExplanation}
+      onGenerateReport={onGenerateReport}
+      reportState={reportState}
       result={result}
     />
   );
@@ -771,6 +1272,253 @@ function AnalysisDatasetSource({ cleanResult, dataset }) {
   );
 }
 
+function TechnicalAnalysisCard({ cleanResult, cleanStatus, dataset, onCleanDataset, technical }) {
+  return (
+    <section className="card technical-card">
+      <div className="card-head">
+        <div>
+          <p className="eyebrow">Data cleaning</p>
+          <h2>{dataset ? dataset.file_name : "Waiting for upload"}</h2>
+        </div>
+      </div>
+      <table className="mini-table">
+        <tbody>
+          {technical.map(([metric, value, signal, tone]) => (
+            <tr key={metric}>
+              <td>{metric}</td>
+              <td>{value}</td>
+              <td><Badge tone={tone}>{signal}</Badge></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {dataset ? (
+        <div className="backend-actions">
+          <button className="button" disabled={cleanStatus.type === "loading"} onClick={onCleanDataset} type="button">
+            {cleanStatus.type === "loading" ? "Cleaning..." : "Clean dataset"}
+          </button>
+          {cleanResult ? (
+            <span>
+              {cleanResult.cleaned_row_count.toLocaleString()} cleaned rows · removed {cleanResult.removed_duplicate_rows} duplicates
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {cleanStatus.message ? (
+        <div aria-live="polite" className={`backend-status ${cleanStatus.type}`} role="status">
+          {cleanStatus.message}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function RecommendationTargetExplanation({ explanation, recommendedTarget }) {
+  const strengths = Array.isArray(explanation?.strengths) ? explanation.strengths : [];
+  const risks = Array.isArray(explanation?.risks) ? explanation.risks : [];
+
+  return (
+    <div className="target-explanation-panel">
+      <strong>Why this target</strong>
+      <p>{explanation?.message || `${recommendedTarget || "The selected target"} is the recommended target for this setup.`}</p>
+      <div className="target-explanation-grid">
+        <div>
+          <span>Strengths</span>
+          {strengths.length ? (
+            <ul>
+              {strengths.slice(0, 3).map((strength, index) => (
+                <li key={`${strength}-${index}`}>{strength}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted">No target strengths were returned.</p>
+          )}
+        </div>
+        <div>
+          <span>Risks</span>
+          {risks.length ? (
+            <ul>
+              {risks.slice(0, 3).map((risk, index) => (
+                <li key={`${risk}-${index}`}>{risk}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted">No major target risks were found.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RecommendationGuidanceList({ emptyText, items, quiet = false, title }) {
+  return (
+    <div className={`column-guidance-list ${quiet ? "quiet" : ""}`}>
+      <strong>{title}</strong>
+      {items.length ? (
+        <ul>
+          {items.map((item, index) => (
+            <li key={`${item.column || item.role || "column"}-${index}`}>
+              <span>
+                <b title={item.column}>{item.column || "Column"}</b>
+                <small>{item.message || "Review this column before creating the analysis job."}</small>
+              </span>
+              <Badge tone={severityTone(item.severity)}>{formatRoleLabel(item.role)}</Badge>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="muted">{emptyText}</p>
+      )}
+    </div>
+  );
+}
+
+function AnalysisRecommendationCard({ onUseRecommendation, recommendationState }) {
+  const { message, recommendation, status } = recommendationState;
+  if (status === "idle" && !recommendation) return null;
+
+  const reasons = Array.isArray(recommendation?.reasons) ? recommendation.reasons : [];
+  const warnings = Array.isArray(recommendation?.warnings) ? recommendation.warnings : [];
+  const alternatives = Array.isArray(recommendation?.alternatives) ? recommendation.alternatives : [];
+  const columnGuidance = Array.isArray(recommendation?.column_guidance) ? recommendation.column_guidance : [];
+  const columnCautions = compactGuidanceItems(
+    columnGuidance.filter((item) => ["high", "medium"].includes(item.severity) && ![
+      "recommended_target",
+      "useful_feature",
+      "possible_date_column"
+    ].includes(item.role)),
+    4
+  );
+  const usefulFeatures = compactGuidanceItems(
+    columnGuidance.filter((item) => item.role === "useful_feature"),
+    4
+  );
+  const dateCandidates = compactGuidanceItems(
+    columnGuidance.filter((item) => item.role === "possible_date_column"),
+    2
+  );
+  const hasSetupDetails = reasons.length || warnings.length;
+  const hasRecommendation = Boolean(recommendation);
+  const confidence = recommendation?.confidence || "manual";
+  const healthScore = recommendation?.health_score;
+
+  return (
+    <div className={`recommendation-panel ${status === "error" ? "unavailable" : ""}`}>
+      <div className="section-kicker">
+        <strong>Setup guidance</strong>
+        <Badge tone={hasRecommendation ? recommendationTone(confidence) : "neutral"}>
+          {status === "loading" ? "Checking" : confidence}
+        </Badge>
+      </div>
+
+      {status === "loading" ? (
+        <p className="muted">Checking the uploaded dataset for a recommended analysis setup...</p>
+      ) : hasRecommendation ? (
+        <>
+          <div className="recommendation-summary">
+            <div>
+              <span>Recommended</span>
+              <strong>{formatTaskLabel(recommendation.recommended_task_type)}</strong>
+            </div>
+            <div>
+              <span>Target</span>
+              <strong>{recommendation.recommended_target_column || "Not available"}</strong>
+            </div>
+            {recommendation.recommended_date_column ? (
+              <div>
+                <span>Date</span>
+                <strong>{recommendation.recommended_date_column}</strong>
+              </div>
+            ) : null}
+            <div>
+              <span>Health score</span>
+              <strong>
+                <Badge tone={healthTone(healthScore)}>
+                  {typeof healthScore === "number" ? `${healthScore}/100` : "Review"}
+                </Badge>
+              </strong>
+            </div>
+          </div>
+
+          <RecommendationTargetExplanation
+            explanation={recommendation.target_explanation}
+            recommendedTarget={recommendation.recommended_target_column}
+          />
+
+          <button className="button sm" onClick={onUseRecommendation} type="button">
+            Use recommendation
+          </button>
+
+          {hasSetupDetails ? (
+            <div className={`recommendation-detail-grid ${warnings.length ? "" : "single"}`}>
+              {reasons.length ? (
+                <div>
+                  <strong>Why this fits</strong>
+                  <ul>
+                    {reasons.map((reason, index) => (
+                      <li key={`${recommendationText(reason)}-${index}`}>{recommendationText(reason)}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {warnings.length ? (
+                <div>
+                  <strong>{confidence === "low" ? "Review before running" : "Warnings"}</strong>
+                  <ul>
+                    {warnings.map((warning, index) => (
+                      <li key={`${recommendationText(warning)}-${index}`}>{recommendationText(warning)}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div className="column-guidance-grid">
+            <RecommendationGuidanceList
+              emptyText="No major column cautions were returned."
+              items={columnCautions}
+              title="Column cautions"
+            />
+            {usefulFeatures.length ? (
+              <RecommendationGuidanceList
+                emptyText="No useful feature guidance was returned."
+                items={usefulFeatures}
+                quiet
+                title="Useful features"
+              />
+            ) : null}
+            {recommendation.recommended_task_type === "forecasting" || dateCandidates.length ? (
+              <RecommendationGuidanceList
+                emptyText="No date candidates were returned."
+                items={dateCandidates}
+                quiet
+                title="Date candidates"
+              />
+            ) : null}
+          </div>
+
+          {alternatives.length ? (
+            <div className="recommendation-alternatives">
+              <strong>Alternatives</strong>
+              {alternatives.slice(0, 3).map((alternative, index) => (
+                <p key={`${alternative.task_type || "alternative"}-${alternative.target_column || index}`}>
+                  {formatTaskLabel(alternative.task_type)} · Target: {alternative.target_column || "Not available"}
+                  {alternative.date_column ? ` · Date: ${alternative.date_column}` : ""}
+                  {alternative.reason ? ` · ${alternative.reason}` : ""}
+                </p>
+              ))}
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <p className="muted">{message || RECOMMENDATION_UNAVAILABLE_MESSAGE}</p>
+      )}
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const {
     dashboardData,
@@ -778,17 +1526,27 @@ export default function DashboardPage() {
     setDashboardData,
     setJobs
   } = useSession();
-  const [range, setRange] = useState("1M");
   const [upload, setUpload] = useState({ status: "idle", file: "", progress: 0, message: "" });
   const [jobForm, setJobForm] = useState({ task_type: "regression", target_column: "", date_column: "" });
   const [cleanStatus, setCleanStatus] = useState({ type: "idle", message: "" });
   const [jobStatus, setJobStatus] = useState({ type: "idle", message: "" });
   const [runStatus, setRunStatus] = useState({ jobId: null, type: "idle", message: "" });
   const [modelResult, setModelResult] = useState(null);
+  const [recommendationState, setRecommendationState] = useState({
+    message: "",
+    recommendation: null,
+    status: "idle"
+  });
   const [aiExplanationState, setAiExplanationState] = useState({
     explanation: null,
     jobId: null,
     message: "",
+    status: "idle"
+  });
+  const [reportState, setReportState] = useState({
+    jobId: null,
+    message: "",
+    report: null,
     status: "idle"
   });
   const { cleanResult, cleaning, dataset, preview } = dashboardData;
@@ -811,19 +1569,24 @@ export default function DashboardPage() {
     setJobStatus({ type: "idle", message: "" });
     setRunStatus({ jobId: null, type: "idle", message: "" });
     setModelResult(null);
+    setRecommendationState({ message: "", recommendation: null, status: "idle" });
     setAiExplanationState({ explanation: null, jobId: null, message: "", status: "idle" });
+    setReportState({ jobId: null, message: "", report: null, status: "idle" });
 
     try {
       const uploaded = await uploadDataset(file);
       setUpload((current) => ({ ...current, progress: 70 }));
-      const [nextPreview, nextCleaning, nextJobs] = await Promise.all([
+      setRecommendationState({ message: "", recommendation: null, status: "loading" });
+      const recommendationRequest = getAnalysisRecommendation(uploaded.id)
+        .then((recommendation) => ({ recommendation }))
+        .catch((error) => ({ error }));
+      const [nextPreview, nextCleaning, nextJobs, recommendationResult] = await Promise.all([
         getDatasetPreview(uploaded.id),
         getCleaningReport(uploaded.id),
-        listAnalysisJobs()
+        listAnalysisJobs(),
+        recommendationRequest
       ]);
-      const firstNumeric = numericColumnsFromPreview(nextPreview)[0];
-      const fallbackTarget = firstNumeric || nextPreview.columns[0] || "";
-      const firstDateColumn = nextPreview.columns.find((column) => column !== fallbackTarget) || "";
+      const nextRecommendation = recommendationResult.recommendation || null;
 
       setDashboardData({
         cleanResult: null,
@@ -832,11 +1595,20 @@ export default function DashboardPage() {
         preview: nextPreview
       });
       setJobs(nextJobs);
-      setJobForm({
-        task_type: firstNumeric ? "regression" : "classification",
-        target_column: fallbackTarget,
-        date_column: firstDateColumn
-      });
+      setJobForm(nextRecommendation
+        ? jobFormFromRecommendation(nextRecommendation, nextPreview)
+        : defaultJobFormFromPreview(nextPreview));
+      setRecommendationState(recommendationResult.error
+        ? {
+          message: RECOMMENDATION_UNAVAILABLE_MESSAGE,
+          recommendation: null,
+          status: "error"
+        }
+        : {
+          message: "",
+          recommendation: nextRecommendation,
+          status: "success"
+        });
       setUpload({
         status: "done",
         file: uploaded.file_name,
@@ -850,7 +1622,13 @@ export default function DashboardPage() {
         progress: 0,
         message: error.message || "Upload failed"
       });
+      setRecommendationState({ message: "", recommendation: null, status: "idle" });
     }
+  }
+
+  function handleUseRecommendation() {
+    if (!recommendationState.recommendation || !preview) return;
+    setJobForm(jobFormFromRecommendation(recommendationState.recommendation, preview));
   }
 
   async function handleCleanDataset() {
@@ -897,6 +1675,7 @@ export default function DashboardPage() {
     setRunStatus({ jobId: job.id, type: "loading", message: `Running ${job.task_type} job #${job.id}...` });
     setModelResult(null);
     setAiExplanationState({ explanation: null, jobId: job.id, message: "", status: "idle" });
+    setReportState({ jobId: job.id, message: "", report: null, status: "idle" });
     try {
       const result = await runAnalysisJob(job.id);
       const nextJobs = await listAnalysisJobs();
@@ -926,6 +1705,12 @@ export default function DashboardPage() {
       message: "Checking for saved local AI explanation...",
       status: "loading"
     });
+    setReportState({
+      jobId: job.id,
+      message: "Checking for saved HTML report...",
+      report: null,
+      status: "loading"
+    });
     try {
       const savedModelResult = await getAnalysisJobResult(job.id);
       setModelResult({ job, model_result: savedModelResult });
@@ -951,8 +1736,26 @@ export default function DashboardPage() {
           status: error.status === 404 ? "idle" : "error"
         });
       }
+
+      try {
+        const cachedReport = await getAnalysisReport(job.id);
+        setReportState({
+          jobId: job.id,
+          message: "Loaded saved HTML report metadata.",
+          report: cachedReport,
+          status: "success"
+        });
+      } catch (error) {
+        setReportState({
+          jobId: job.id,
+          message: error.status === 404 ? "" : reportErrorMessage(error),
+          report: null,
+          status: error.status === 404 ? "idle" : "error"
+        });
+      }
     } catch (error) {
       setAiExplanationState({ explanation: null, jobId: job.id, message: "", status: "idle" });
+      setReportState({ jobId: job.id, message: "", report: null, status: "idle" });
       setRunStatus({
         jobId: job.id,
         type: "error",
@@ -987,193 +1790,210 @@ export default function DashboardPage() {
     }
   }
 
+  async function handleGenerateReport(jobId) {
+    setReportState((current) => ({
+      jobId,
+      message: "Generating HTML report...",
+      report: current.jobId === jobId ? current.report : null,
+      status: "loading"
+    }));
+
+    try {
+      const report = await generateAnalysisReport(jobId);
+      setReportState({
+        jobId,
+        message: "HTML report is ready.",
+        report,
+        status: "success"
+      });
+    } catch (error) {
+      setReportState((current) => ({
+        jobId,
+        message: reportErrorMessage(error),
+        report: current.jobId === jobId ? current.report : null,
+        status: "error"
+      }));
+    }
+  }
+
   return (
     <main className="page-shell">
-      <section className="dashboard-grid">
-        <Dropzone onUpload={startUpload} upload={upload} />
-        <section className="card kpi-strip">
-          {stats.map(([label, value, delta, tone]) => (
-            <StatCard delta={delta} key={label} label={label} tone={tone} value={value} />
-          ))}
+      <section className="workflow-layout">
+        <section className="workflow-hero" aria-label="Current analysis workflow">
+          <Dropzone onUpload={startUpload} upload={upload} />
+          <WorkflowStatusCard
+            dataset={dataset}
+            jobForm={jobForm}
+            jobs={jobs}
+            modelResult={modelResult}
+            recommendationState={recommendationState}
+            reportState={reportState}
+            stats={stats}
+          />
         </section>
 
-        <section className="card chart-card">
-          <div className="card-head">
-            <div>
-              <p className="eyebrow">Dataset overview</p>
-              <h2>Profile placeholder</h2>
-            </div>
-            <Segmented onChange={setRange} value={range} values={["1W", "1M", "3M", "1Y"]} />
-          </div>
-          <LineChart label={`Sample profile chart for ${range}`} range={range} />
-          <div className="legend-row">
-            <span><i className="legend-dot solid" />Sample</span>
-            <span><i className="legend-dot muted" />Reference</span>
-          </div>
-        </section>
+        {modelResult ? (
+          <section className="result-workspace" aria-label="Completed model result">
+            <ModelResultCard
+              aiExplanationState={aiExplanationState}
+              onGenerateAiExplanation={handleGenerateAiExplanation}
+              onGenerateReport={handleGenerateReport}
+              reportState={reportState}
+              result={modelResult}
+            />
+          </section>
+        ) : null}
 
-        <AiSummaryCard cleaning={cleaning} dataset={dataset} preview={preview} />
-
-        <section className="card technical-card">
-          <div className="card-head">
-            <div>
-              <p className="eyebrow">Technical analysis</p>
-              <h2>{dataset ? dataset.file_name : "Signal review"}</h2>
-            </div>
+        <section className={`analysis-workspace ${modelResult ? "has-result" : ""}`} aria-label="Dataset understanding and analysis setup">
+          <div className="dataset-column">
+            <DatasetInsightsCard
+              cleaning={cleaning}
+              dataset={dataset}
+              preview={preview}
+              targetColumn={jobForm.target_column}
+            />
+            <AnalysisRecommendationCard
+              onUseRecommendation={handleUseRecommendation}
+              recommendationState={recommendationState}
+            />
           </div>
-          <table className="mini-table">
-            <tbody>
-              {technical.map(([metric, value, signal, tone]) => (
-                <tr key={metric}>
-                  <td>{metric}</td>
-                  <td>{value}</td>
-                  <td><Badge tone={tone}>{signal}</Badge></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {dataset ? (
-            <div className="backend-actions">
-              <button className="button" disabled={cleanStatus.type === "loading"} onClick={handleCleanDataset} type="button">
-                {cleanStatus.type === "loading" ? "Cleaning..." : "Clean dataset"}
-              </button>
-              {cleanResult ? (
-                <span>
-                  {cleanResult.cleaned_row_count.toLocaleString()} cleaned rows · removed {cleanResult.removed_duplicate_rows} duplicates
-                </span>
-              ) : null}
-            </div>
-          ) : null}
-          {cleanStatus.message ? (
-            <div aria-live="polite" className={`backend-status ${cleanStatus.type}`} role="status">
-              {cleanStatus.message}
-            </div>
-          ) : null}
-        </section>
 
-        <section className="card backend-card">
-          <div className="card-head">
-            <div>
-              <p className="eyebrow">Analysis request</p>
-              <h2>Create analysis request</h2>
-            </div>
-            <Badge tone={jobs.length ? "ok" : "neutral"}>{jobs.length} jobs</Badge>
-          </div>
-          <AnalysisDatasetSource cleanResult={cleanResult} dataset={dataset} />
-          <form className="analysis-form" onSubmit={handleCreateJob}>
-            <label>
-              <span>Analysis type</span>
-              <select
-                disabled={!dataset}
-                onChange={(event) => {
-                  const taskType = event.target.value;
-                  setJobForm((current) => {
-                    const dateColumn = taskType === "forecasting" && (!current.date_column || current.date_column === current.target_column)
-                      ? (preview?.columns || []).find((column) => column !== current.target_column) || ""
-                      : current.date_column;
-                    return { ...current, date_column: dateColumn, task_type: taskType };
-                  });
-                }}
-                value={jobForm.task_type}
-              >
-                <option value="classification">Classification</option>
-                <option value="regression">Regression</option>
-                <option value="forecasting">Forecasting</option>
-              </select>
-            </label>
-            <label>
-              <span>Target column</span>
-              <select
-                disabled={!dataset}
-                onChange={(event) => {
-                  const targetColumn = event.target.value;
-                  setJobForm((current) => ({
-                    ...current,
-                    date_column: current.date_column === targetColumn
-                      ? (preview?.columns || []).find((column) => column !== targetColumn) || ""
-                      : current.date_column,
-                    target_column: targetColumn
-                  }));
-                }}
-                value={jobForm.target_column}
-              >
-                {(preview?.columns || []).map((column) => (
-                  <option key={column} value={column}>{column}</option>
-                ))}
-              </select>
-            </label>
-            {jobForm.task_type === "forecasting" ? (
-              <label>
-                <span>Date column for forecasting</span>
-                <select
-                  disabled={!dataset}
-                  onChange={(event) => setJobForm((current) => ({ ...current, date_column: event.target.value }))}
-                  value={jobForm.date_column}
-                >
-                  {(preview?.columns || []).filter((column) => column !== jobForm.target_column).map((column) => (
-                    <option key={column} value={column}>{column}</option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-            <button className="button primary" disabled={!dataset || jobStatus.type === "loading"} type="submit">
-              Create job
-            </button>
-          </form>
-          <p className="muted">
-            {dataset
-              ? "Create the job first; classification, regression, and forecasting jobs can be run here."
-              : "Upload a dataset to enable backend analysis requests."}
-          </p>
-          <p className="muted">
-            Classification, regression, and forecasting training are available.
-          </p>
-          {numericColumns.length ? <p className="muted">Numeric columns: {numericColumns.slice(0, 4).join(", ")}</p> : null}
-          {jobStatus.message ? <div aria-live="polite" className={`backend-status ${jobStatus.type}`} role="status">{jobStatus.message}</div> : null}
-          {runStatus.message ? <div aria-live="polite" className={`backend-status ${runStatus.type}`} role="status">{runStatus.message}</div> : null}
-          {jobs.length ? (
-            <div className="job-list">
-              {jobs.slice(0, 4).map((job) => (
-                <div className="job-row" key={job.id}>
-                  <span className="job-details">
-                    <strong>#{job.id} {job.task_type}</strong>
-                    <small className="job-file">{job.dataset_file_name || "Uploaded dataset"}</small>
-                    <small className="job-target">Target: {job.target_column}</small>
-                    <small className="job-source">Source: {job.dataset_source_label || "Original uploaded file"}</small>
-                  </span>
-                  <Badge tone={job.status === "failed" ? "err" : job.status === "completed" ? "ok" : "warn"}>{job.status}</Badge>
-                  {isRunnableTask(job.task_type) && job.status === "created" ? (
-                    <button
-                      className="button sm"
-                      disabled={runStatus.type === "loading"}
-                      onClick={() => handleRunJob(job)}
-                      type="button"
-                    >
-                      {runStatus.type === "loading" && runStatus.jobId === job.id ? "Running..." : "Run job"}
-                    </button>
-                  ) : null}
-                  {isRunnableTask(job.task_type) && job.status === "completed" ? (
-                    <button
-                      className="button sm"
-                      disabled={runStatus.type === "loading"}
-                      onClick={() => handleViewResult(job)}
-                      type="button"
-                    >
-                      {runStatus.type === "loading" && runStatus.jobId === job.id ? "Loading..." : "View result"}
-                    </button>
-                  ) : null}
+          <div className="analysis-column">
+            <section className="card backend-card">
+              <div className="card-head">
+                <div>
+                  <p className="eyebrow">Analysis request</p>
+                  <h2>Create and run analysis</h2>
                 </div>
-              ))}
-            </div>
-          ) : null}
+                <Badge tone={jobs.length ? "ok" : "neutral"}>{jobs.length} jobs</Badge>
+              </div>
+              <AnalysisDatasetSource cleanResult={cleanResult} dataset={dataset} />
+              <form className="analysis-form" onSubmit={handleCreateJob}>
+                <label>
+                  <span>Analysis type</span>
+                  <select
+                    disabled={!dataset}
+                    onChange={(event) => {
+                      const taskType = event.target.value;
+                      setJobForm((current) => {
+                        const dateColumn = taskType === "forecasting" && (!current.date_column || current.date_column === current.target_column)
+                          ? (preview?.columns || []).find((column) => column !== current.target_column) || ""
+                          : current.date_column;
+                        return { ...current, date_column: dateColumn, task_type: taskType };
+                      });
+                    }}
+                    value={jobForm.task_type}
+                  >
+                    <option value="classification">Classification</option>
+                    <option value="regression">Regression</option>
+                    <option value="forecasting">Forecasting</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Target column</span>
+                  <select
+                    disabled={!dataset}
+                    onChange={(event) => {
+                      const targetColumn = event.target.value;
+                      setJobForm((current) => ({
+                        ...current,
+                        date_column: current.date_column === targetColumn
+                          ? (preview?.columns || []).find((column) => column !== targetColumn) || ""
+                          : current.date_column,
+                        target_column: targetColumn
+                      }));
+                    }}
+                    value={jobForm.target_column}
+                  >
+                    {(preview?.columns || []).map((column) => (
+                      <option key={column} value={column}>{column}</option>
+                    ))}
+                  </select>
+                </label>
+                {jobForm.task_type === "forecasting" ? (
+                  <label>
+                    <span>Date column for forecasting</span>
+                    <select
+                      disabled={!dataset}
+                      onChange={(event) => setJobForm((current) => ({ ...current, date_column: event.target.value }))}
+                      value={jobForm.date_column}
+                    >
+                      {(preview?.columns || []).filter((column) => column !== jobForm.target_column).map((column) => (
+                        <option key={column} value={column}>{column}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+                <button className="button primary" disabled={!dataset || jobStatus.type === "loading"} type="submit">
+                  Create job
+                </button>
+              </form>
+              <div className="analysis-helper">
+                <p>
+                  {dataset
+                    ? "Create the request, then run it from the recent jobs list."
+                    : "Upload a dataset to enable analysis requests."}
+                </p>
+                {numericColumns.length ? <p>Numeric columns: {numericColumns.slice(0, 4).join(", ")}</p> : null}
+              </div>
+              {jobStatus.message ? <div aria-live="polite" className={`backend-status ${jobStatus.type}`} role="status">{jobStatus.message}</div> : null}
+              {runStatus.message ? <div aria-live="polite" className={`backend-status ${runStatus.type}`} role="status">{runStatus.message}</div> : null}
+              {jobs.length ? (
+                <section className="job-queue" aria-label="Recent analysis jobs">
+                  <div className="section-kicker">
+                    <strong>Recent jobs</strong>
+                    <span>{jobs.slice(0, 4).length} shown</span>
+                  </div>
+                  <div className="job-list">
+                    {jobs.slice(0, 4).map((job) => (
+                      <div className="job-row" key={job.id}>
+                        <span className="job-details">
+                          <strong>#{job.id} {job.task_type}</strong>
+                          <small className="job-file" title={job.dataset_file_name || "Uploaded dataset"}>{job.dataset_file_name || "Uploaded dataset"}</small>
+                          <small className="job-target">Target: {job.target_column}</small>
+                          <small className="job-source">Source: {job.dataset_source_label || "Original uploaded file"}</small>
+                        </span>
+                        <Badge tone={job.status === "failed" ? "err" : job.status === "completed" ? "ok" : "warn"}>{job.status}</Badge>
+                        {isRunnableTask(job.task_type) && job.status === "created" ? (
+                          <button
+                            className="button sm"
+                            disabled={runStatus.type === "loading"}
+                            onClick={() => handleRunJob(job)}
+                            type="button"
+                          >
+                            {runStatus.type === "loading" && runStatus.jobId === job.id ? "Running..." : "Run job"}
+                          </button>
+                        ) : null}
+                        {isRunnableTask(job.task_type) && job.status === "completed" ? (
+                          <button
+                            className="button sm"
+                            disabled={runStatus.type === "loading"}
+                            onClick={() => handleViewResult(job)}
+                            type="button"
+                          >
+                            {runStatus.type === "loading" && runStatus.jobId === job.id ? "Loading..." : "View result"}
+                          </button>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+            </section>
+          </div>
         </section>
 
-        <ModelResultCard
-          aiExplanationState={aiExplanationState}
-          onGenerateAiExplanation={handleGenerateAiExplanation}
-          result={modelResult}
-        />
-        <DatasetPreviewCard dataset={dataset} preview={preview} />
+        <section className="supporting-data" aria-label="Supporting dataset details">
+          <AiSummaryCard cleaning={cleaning} dataset={dataset} preview={preview} />
+          <TechnicalAnalysisCard
+            cleanResult={cleanResult}
+            cleanStatus={cleanStatus}
+            dataset={dataset}
+            onCleanDataset={handleCleanDataset}
+            technical={technical}
+          />
+          <DatasetPreviewCard dataset={dataset} preview={preview} />
+        </section>
       </section>
     </main>
   );

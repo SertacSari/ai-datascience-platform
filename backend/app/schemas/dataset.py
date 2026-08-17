@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -58,3 +58,44 @@ class CleanDatasetResponse(BaseModel):
     cleaned_row_count: int
     removed_duplicate_rows: int
     message: str
+
+
+class AnalysisRecommendationAlternative(BaseModel):
+    task_type: Literal["classification", "regression", "forecasting"]
+    target_column: str
+    date_column: str | None = None
+    reason: str
+
+
+class TargetExplanation(BaseModel):
+    column: str
+    message: str
+    strengths: list[str]
+    risks: list[str]
+
+
+class ColumnGuidance(BaseModel):
+    column: str
+    role: Literal[
+        "recommended_target",
+        "useful_feature",
+        "possible_target",
+        "not_recommended_target",
+        "possible_date_column",
+    ]
+    severity: Literal["low", "medium", "high"]
+    message: str
+
+
+class AnalysisRecommendationResponse(BaseModel):
+    dataset_id: int
+    recommended_task_type: Literal["classification", "regression", "forecasting"]
+    recommended_target_column: str
+    recommended_date_column: str | None = None
+    confidence: Literal["high", "medium", "low"]
+    health_score: int
+    reasons: list[str]
+    warnings: list[str]
+    alternatives: list[AnalysisRecommendationAlternative]
+    target_explanation: TargetExplanation
+    column_guidance: list[ColumnGuidance]

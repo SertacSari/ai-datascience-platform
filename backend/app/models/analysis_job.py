@@ -96,6 +96,11 @@ class AnalysisJob(Base):
         back_populates="analysis_job",
         uselist=False,
     )
+    analysis_report = relationship(
+        "AnalysisReport",
+        back_populates="analysis_job",
+        uselist=False,
+    )
 
     @property
     def dataset_file_name(self) -> str | None:

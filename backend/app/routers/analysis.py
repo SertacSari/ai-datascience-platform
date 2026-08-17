@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Query, status
+from fastapi import APIRouter, Depends, Path, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -12,6 +12,7 @@ from app.schemas.analysis import (
     AnalysisJobCreate,
     AnalysisJobResponse,
     AnalysisJobRunResponse,
+    AnalysisReportResponse,
     ModelResultResponse,
 )
 from app.services.ai_service import create_ai_explanation, get_ai_explanation
@@ -22,6 +23,11 @@ from app.services.analysis_service import (
     list_analysis_jobs,
 )
 from app.services.model_training_service import run_analysis_job
+from app.services.report_service import (
+    create_analysis_report,
+    get_analysis_report,
+    get_analysis_report_html,
+)
 
 
 router = APIRouter(
@@ -149,4 +155,57 @@ def get_ai_explanation_endpoint(
         db=db,
         job_id=job_id,
         current_user=current_user,
+    )
+
+
+@router.post(
+    "/jobs/{job_id}/report",
+    response_model=AnalysisReportResponse,
+)
+def create_analysis_report_endpoint(
+    job_id: Annotated[int, Path(gt=0)],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> AnalysisReportResponse:
+    return create_analysis_report(
+        db=db,
+        job_id=job_id,
+        current_user=current_user,
+    )
+
+
+@router.get(
+    "/jobs/{job_id}/report",
+    response_model=AnalysisReportResponse,
+)
+def get_analysis_report_endpoint(
+    job_id: Annotated[int, Path(gt=0)],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> AnalysisReportResponse:
+    return get_analysis_report(
+        db=db,
+        job_id=job_id,
+        current_user=current_user,
+    )
+
+
+@router.get("/jobs/{job_id}/report/download")
+def download_analysis_report_endpoint(
+    job_id: Annotated[int, Path(gt=0)],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    report = get_analysis_report_html(
+        db=db,
+        job_id=job_id,
+        current_user=current_user,
+    )
+
+    return Response(
+        content=report.html_content,
+        media_type="text/html",
+        headers={
+            "Content-Disposition": f'attachment; filename="{report.file_name}"',
+        },
     )

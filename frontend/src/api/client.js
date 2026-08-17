@@ -106,6 +106,14 @@ export async function getCleaningReport(datasetId) {
   );
 }
 
+export async function getAnalysisRecommendation(datasetId) {
+  return parseResponse(
+    await fetch(`${API_BASE_URL}/datasets/${datasetId}/analysis-recommendation`, {
+      credentials: "include"
+    })
+  );
+}
+
 export async function cleanDataset(datasetId) {
   return parseResponse(
     await fetch(`${API_BASE_URL}/datasets/${datasetId}/clean`, {
@@ -150,6 +158,27 @@ export async function getAiExplanation(jobId) {
       credentials: "include"
     })
   );
+}
+
+export async function generateAnalysisReport(jobId) {
+  return parseResponse(
+    await fetch(`${API_BASE_URL}/analysis/jobs/${jobId}/report`, {
+      method: "POST",
+      credentials: "include"
+    })
+  );
+}
+
+export async function getAnalysisReport(jobId) {
+  return parseResponse(
+    await fetch(`${API_BASE_URL}/analysis/jobs/${jobId}/report`, {
+      credentials: "include"
+    })
+  );
+}
+
+export function getAnalysisReportDownloadUrl(jobId) {
+  return `${API_BASE_URL}/analysis/jobs/${jobId}/report/download`;
 }
 
 export async function getAnalysisJobResult(jobId) {
