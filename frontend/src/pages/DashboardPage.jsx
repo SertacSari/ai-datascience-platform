@@ -419,6 +419,67 @@ function DatasetPreviewCard({ dataset, preview }) {
   );
 }
 
+function WorkflowStatusCard({ dataset, jobForm, jobs, modelResult, recommendationState, reportState, stats }) {
+  const recommendation = recommendationState.recommendation;
+  const hasCreatedJob = jobs.some((job) => job.status === "created");
+  const hasCompletedJob = jobs.some((job) => job.status === "completed");
+  const nextAction = !dataset
+    ? "Upload a CSV or Excel file to start."
+    : !modelResult && hasCreatedJob
+      ? "Run a created job from Recent jobs."
+      : !modelResult && hasCompletedJob
+        ? "Open a completed result from Recent jobs."
+        : !modelResult
+          ? "Review the setup, then create an analysis request."
+          : reportState.report
+            ? "Download the HTML report or review the saved result."
+            : "Generate an HTML report from Optional outputs.";
+
+  const workflowSteps = [
+    ["Upload", dataset ? "ok" : "warn"],
+    ["Understand", recommendation ? "ok" : dataset ? "warn" : "neutral"],
+    ["Run", modelResult || hasCompletedJob ? "ok" : jobs.length ? "warn" : "neutral"],
+    ["Export", reportState.report ? "ok" : modelResult ? "warn" : "neutral"]
+  ];
+
+  return (
+    <section className="card workflow-status-card">
+      <div className="card-head">
+        <div>
+          <p className="eyebrow">Workflow</p>
+          <h2>{dataset ? dataset.file_name : "No dataset loaded"}</h2>
+        </div>
+        <Badge tone={modelResult ? "ok" : dataset ? "warn" : "neutral"}>
+          {modelResult ? "Result ready" : dataset ? "Setup" : "Start"}
+        </Badge>
+      </div>
+      <div className="workflow-steps" aria-label="Analysis workflow status">
+        {workflowSteps.map(([label, tone]) => (
+          <span className={tone} key={label}>{label}</span>
+        ))}
+      </div>
+      <div className="workflow-next">
+        <div>
+          <span>Recommended setup</span>
+          <strong>
+            {recommendation
+              ? `${formatTaskLabel(recommendation.recommended_task_type)} / ${recommendation.recommended_target_column}`
+              : dataset
+                ? `${formatTaskLabel(jobForm.task_type)} / ${jobForm.target_column || "choose target"}`
+                : "Waiting for upload"}
+          </strong>
+        </div>
+        <p>{nextAction}</p>
+      </div>
+      <div className="workflow-kpis">
+        {stats.map(([label, value, delta, tone]) => (
+          <StatCard delta={delta} key={label} label={label} tone={tone} value={value} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function formatPercentageMetric(value) {
   if (typeof value !== "number") return value ?? "Not available";
   return `${(value * 100).toFixed(1)}%`;
@@ -680,6 +741,37 @@ function AnalysisReportSection({ jobId, onGenerateReport, reportState }) {
   );
 }
 
+function ResultActionStack({
+  aiExplanationState,
+  jobId,
+  onGenerateAiExplanation,
+  onGenerateReport,
+  reportState
+}) {
+  if (!jobId) return null;
+
+  return (
+    <div className="result-action-stack">
+      <div className="section-kicker">
+        <strong>Optional outputs</strong>
+        <span>local explanation and HTML report</span>
+      </div>
+      <div className="result-action-grid">
+        <LocalAiExplanationSection
+          aiExplanationState={aiExplanationState}
+          jobId={jobId}
+          onGenerate={onGenerateAiExplanation}
+        />
+        <AnalysisReportSection
+          jobId={jobId}
+          onGenerateReport={onGenerateReport}
+          reportState={reportState}
+        />
+      </div>
+    </div>
+  );
+}
+
 function ClassificationResultCard({
   aiExplanationState,
   onGenerateAiExplanation,
@@ -740,14 +832,10 @@ function ClassificationResultCard({
 
       <ResultRecommendedActions actions={recommendedActions} />
 
-      <LocalAiExplanationSection
+      <ResultActionStack
         aiExplanationState={aiExplanationState}
         jobId={result?.job?.id}
-        onGenerate={onGenerateAiExplanation}
-      />
-
-      <AnalysisReportSection
-        jobId={result?.job?.id}
+        onGenerateAiExplanation={onGenerateAiExplanation}
         onGenerateReport={onGenerateReport}
         reportState={reportState}
       />
@@ -883,14 +971,10 @@ function RegressionResultCard({
 
       <ResultRecommendedActions actions={recommendedActions} />
 
-      <LocalAiExplanationSection
+      <ResultActionStack
         aiExplanationState={aiExplanationState}
         jobId={result?.job?.id}
-        onGenerate={onGenerateAiExplanation}
-      />
-
-      <AnalysisReportSection
-        jobId={result?.job?.id}
+        onGenerateAiExplanation={onGenerateAiExplanation}
         onGenerateReport={onGenerateReport}
         reportState={reportState}
       />
@@ -1016,14 +1100,10 @@ function ForecastingResultCard({
 
       <ResultRecommendedActions actions={recommendedActions} />
 
-      <LocalAiExplanationSection
+      <ResultActionStack
         aiExplanationState={aiExplanationState}
         jobId={result?.job?.id}
-        onGenerate={onGenerateAiExplanation}
-      />
-
-      <AnalysisReportSection
-        jobId={result?.job?.id}
+        onGenerateAiExplanation={onGenerateAiExplanation}
         onGenerateReport={onGenerateReport}
         reportState={reportState}
       />
@@ -1192,6 +1272,47 @@ function AnalysisDatasetSource({ cleanResult, dataset }) {
   );
 }
 
+function TechnicalAnalysisCard({ cleanResult, cleanStatus, dataset, onCleanDataset, technical }) {
+  return (
+    <section className="card technical-card">
+      <div className="card-head">
+        <div>
+          <p className="eyebrow">Data cleaning</p>
+          <h2>{dataset ? dataset.file_name : "Waiting for upload"}</h2>
+        </div>
+      </div>
+      <table className="mini-table">
+        <tbody>
+          {technical.map(([metric, value, signal, tone]) => (
+            <tr key={metric}>
+              <td>{metric}</td>
+              <td>{value}</td>
+              <td><Badge tone={tone}>{signal}</Badge></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {dataset ? (
+        <div className="backend-actions">
+          <button className="button" disabled={cleanStatus.type === "loading"} onClick={onCleanDataset} type="button">
+            {cleanStatus.type === "loading" ? "Cleaning..." : "Clean dataset"}
+          </button>
+          {cleanResult ? (
+            <span>
+              {cleanResult.cleaned_row_count.toLocaleString()} cleaned rows · removed {cleanResult.removed_duplicate_rows} duplicates
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {cleanStatus.message ? (
+        <div aria-live="polite" className={`backend-status ${cleanStatus.type}`} role="status">
+          {cleanStatus.message}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function RecommendationTargetExplanation({ explanation, recommendedTarget }) {
   const strengths = Array.isArray(explanation?.strengths) ? explanation.strengths : [];
   const risks = Array.isArray(explanation?.risks) ? explanation.risks : [];
@@ -1277,6 +1398,7 @@ function AnalysisRecommendationCard({ onUseRecommendation, recommendationState }
     columnGuidance.filter((item) => item.role === "possible_date_column"),
     2
   );
+  const hasSetupDetails = reasons.length || warnings.length;
   const hasRecommendation = Boolean(recommendation);
   const confidence = recommendation?.confidence || "manual";
   const healthScore = recommendation?.health_score;
@@ -1328,32 +1450,30 @@ function AnalysisRecommendationCard({ onUseRecommendation, recommendationState }
             Use recommendation
           </button>
 
-          <div className="recommendation-detail-grid">
-            <div>
-              <strong>Why this fits</strong>
+          {hasSetupDetails ? (
+            <div className={`recommendation-detail-grid ${warnings.length ? "" : "single"}`}>
               {reasons.length ? (
-                <ul>
-                  {reasons.map((reason, index) => (
-                    <li key={`${recommendationText(reason)}-${index}`}>{recommendationText(reason)}</li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="muted">No detailed reasons were returned.</p>
-              )}
-            </div>
-            <div>
-              <strong>{confidence === "low" ? "Review before running" : "Warnings"}</strong>
+                <div>
+                  <strong>Why this fits</strong>
+                  <ul>
+                    {reasons.map((reason, index) => (
+                      <li key={`${recommendationText(reason)}-${index}`}>{recommendationText(reason)}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
               {warnings.length ? (
-                <ul>
-                  {warnings.map((warning, index) => (
-                    <li key={`${recommendationText(warning)}-${index}`}>{recommendationText(warning)}</li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="muted">No setup warnings were returned.</p>
-              )}
+                <div>
+                  <strong>{confidence === "low" ? "Review before running" : "Warnings"}</strong>
+                  <ul>
+                    {warnings.map((warning, index) => (
+                      <li key={`${recommendationText(warning)}-${index}`}>{recommendationText(warning)}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </div>
-          </div>
+          ) : null}
 
           <div className="column-guidance-grid">
             <RecommendationGuidanceList
@@ -1361,12 +1481,14 @@ function AnalysisRecommendationCard({ onUseRecommendation, recommendationState }
               items={columnCautions}
               title="Column cautions"
             />
-            <RecommendationGuidanceList
-              emptyText="No useful feature guidance was returned."
-              items={usefulFeatures}
-              quiet
-              title="Useful features"
-            />
+            {usefulFeatures.length ? (
+              <RecommendationGuidanceList
+                emptyText="No useful feature guidance was returned."
+                items={usefulFeatures}
+                quiet
+                title="Useful features"
+              />
+            ) : null}
             {recommendation.recommended_task_type === "forecasting" || dateCandidates.length ? (
               <RecommendationGuidanceList
                 emptyText="No date candidates were returned."
@@ -1696,195 +1818,182 @@ export default function DashboardPage() {
 
   return (
     <main className="page-shell">
-      <section className="dashboard-grid">
-        <Dropzone onUpload={startUpload} upload={upload} />
-        <section className="card kpi-strip">
-          {stats.map(([label, value, delta, tone]) => (
-            <StatCard delta={delta} key={label} label={label} tone={tone} value={value} />
-          ))}
-        </section>
-
-        <DatasetInsightsCard
-          cleaning={cleaning}
-          dataset={dataset}
-          preview={preview}
-          targetColumn={jobForm.target_column}
-        />
-
-        <AiSummaryCard cleaning={cleaning} dataset={dataset} preview={preview} />
-
-        <section className="card technical-card">
-          <div className="card-head">
-            <div>
-              <p className="eyebrow">Technical analysis</p>
-              <h2>{dataset ? dataset.file_name : "Signal review"}</h2>
-            </div>
-          </div>
-          <table className="mini-table">
-            <tbody>
-              {technical.map(([metric, value, signal, tone]) => (
-                <tr key={metric}>
-                  <td>{metric}</td>
-                  <td>{value}</td>
-                  <td><Badge tone={tone}>{signal}</Badge></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {dataset ? (
-            <div className="backend-actions">
-              <button className="button" disabled={cleanStatus.type === "loading"} onClick={handleCleanDataset} type="button">
-                {cleanStatus.type === "loading" ? "Cleaning..." : "Clean dataset"}
-              </button>
-              {cleanResult ? (
-                <span>
-                  {cleanResult.cleaned_row_count.toLocaleString()} cleaned rows · removed {cleanResult.removed_duplicate_rows} duplicates
-                </span>
-              ) : null}
-            </div>
-          ) : null}
-          {cleanStatus.message ? (
-            <div aria-live="polite" className={`backend-status ${cleanStatus.type}`} role="status">
-              {cleanStatus.message}
-            </div>
-          ) : null}
-        </section>
-
-        <section className="card backend-card">
-          <div className="card-head">
-            <div>
-              <p className="eyebrow">Analysis request</p>
-              <h2>Create analysis request</h2>
-            </div>
-            <Badge tone={jobs.length ? "ok" : "neutral"}>{jobs.length} jobs</Badge>
-          </div>
-          <AnalysisDatasetSource cleanResult={cleanResult} dataset={dataset} />
-          <AnalysisRecommendationCard
-            onUseRecommendation={handleUseRecommendation}
+      <section className="workflow-layout">
+        <section className="workflow-hero" aria-label="Current analysis workflow">
+          <Dropzone onUpload={startUpload} upload={upload} />
+          <WorkflowStatusCard
+            dataset={dataset}
+            jobForm={jobForm}
+            jobs={jobs}
+            modelResult={modelResult}
             recommendationState={recommendationState}
+            reportState={reportState}
+            stats={stats}
           />
-          <form className="analysis-form" onSubmit={handleCreateJob}>
-            <label>
-              <span>Analysis type</span>
-              <select
-                disabled={!dataset}
-                onChange={(event) => {
-                  const taskType = event.target.value;
-                  setJobForm((current) => {
-                    const dateColumn = taskType === "forecasting" && (!current.date_column || current.date_column === current.target_column)
-                      ? (preview?.columns || []).find((column) => column !== current.target_column) || ""
-                      : current.date_column;
-                    return { ...current, date_column: dateColumn, task_type: taskType };
-                  });
-                }}
-                value={jobForm.task_type}
-              >
-                <option value="classification">Classification</option>
-                <option value="regression">Regression</option>
-                <option value="forecasting">Forecasting</option>
-              </select>
-            </label>
-            <label>
-              <span>Target column</span>
-              <select
-                disabled={!dataset}
-                onChange={(event) => {
-                  const targetColumn = event.target.value;
-                  setJobForm((current) => ({
-                    ...current,
-                    date_column: current.date_column === targetColumn
-                      ? (preview?.columns || []).find((column) => column !== targetColumn) || ""
-                      : current.date_column,
-                    target_column: targetColumn
-                  }));
-                }}
-                value={jobForm.target_column}
-              >
-                {(preview?.columns || []).map((column) => (
-                  <option key={column} value={column}>{column}</option>
-                ))}
-              </select>
-            </label>
-            {jobForm.task_type === "forecasting" ? (
-              <label>
-                <span>Date column for forecasting</span>
-                <select
-                  disabled={!dataset}
-                  onChange={(event) => setJobForm((current) => ({ ...current, date_column: event.target.value }))}
-                  value={jobForm.date_column}
-                >
-                  {(preview?.columns || []).filter((column) => column !== jobForm.target_column).map((column) => (
-                    <option key={column} value={column}>{column}</option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-            <button className="button primary" disabled={!dataset || jobStatus.type === "loading"} type="submit">
-              Create job
-            </button>
-          </form>
-          <div className="analysis-helper">
-            <p>
-              {dataset
-                ? "Create the request, then run it from the recent jobs list."
-                : "Upload a dataset to enable analysis requests."}
-            </p>
-            <p>Classification, regression, and forecasting training are available.</p>
-            {numericColumns.length ? <p>Numeric columns: {numericColumns.slice(0, 4).join(", ")}</p> : null}
-          </div>
-          {jobStatus.message ? <div aria-live="polite" className={`backend-status ${jobStatus.type}`} role="status">{jobStatus.message}</div> : null}
-          {runStatus.message ? <div aria-live="polite" className={`backend-status ${runStatus.type}`} role="status">{runStatus.message}</div> : null}
-          {jobs.length ? (
-            <section className="job-queue" aria-label="Recent analysis jobs">
-              <div className="section-kicker">
-                <strong>Recent jobs</strong>
-                <span>{jobs.slice(0, 4).length} shown</span>
-              </div>
-              <div className="job-list">
-                {jobs.slice(0, 4).map((job) => (
-                  <div className="job-row" key={job.id}>
-                    <span className="job-details">
-                      <strong>#{job.id} {job.task_type}</strong>
-                      <small className="job-file" title={job.dataset_file_name || "Uploaded dataset"}>{job.dataset_file_name || "Uploaded dataset"}</small>
-                      <small className="job-target">Target: {job.target_column}</small>
-                      <small className="job-source">Source: {job.dataset_source_label || "Original uploaded file"}</small>
-                    </span>
-                    <Badge tone={job.status === "failed" ? "err" : job.status === "completed" ? "ok" : "warn"}>{job.status}</Badge>
-                    {isRunnableTask(job.task_type) && job.status === "created" ? (
-                      <button
-                        className="button sm"
-                        disabled={runStatus.type === "loading"}
-                        onClick={() => handleRunJob(job)}
-                        type="button"
-                      >
-                        {runStatus.type === "loading" && runStatus.jobId === job.id ? "Running..." : "Run job"}
-                      </button>
-                    ) : null}
-                    {isRunnableTask(job.task_type) && job.status === "completed" ? (
-                      <button
-                        className="button sm"
-                        disabled={runStatus.type === "loading"}
-                        onClick={() => handleViewResult(job)}
-                        type="button"
-                      >
-                        {runStatus.type === "loading" && runStatus.jobId === job.id ? "Loading..." : "View result"}
-                      </button>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            </section>
-          ) : null}
         </section>
 
-        <ModelResultCard
-          aiExplanationState={aiExplanationState}
-          onGenerateAiExplanation={handleGenerateAiExplanation}
-          onGenerateReport={handleGenerateReport}
-          reportState={reportState}
-          result={modelResult}
-        />
-        <DatasetPreviewCard dataset={dataset} preview={preview} />
+        {modelResult ? (
+          <section className="result-workspace" aria-label="Completed model result">
+            <ModelResultCard
+              aiExplanationState={aiExplanationState}
+              onGenerateAiExplanation={handleGenerateAiExplanation}
+              onGenerateReport={handleGenerateReport}
+              reportState={reportState}
+              result={modelResult}
+            />
+          </section>
+        ) : null}
+
+        <section className={`analysis-workspace ${modelResult ? "has-result" : ""}`} aria-label="Dataset understanding and analysis setup">
+          <div className="dataset-column">
+            <DatasetInsightsCard
+              cleaning={cleaning}
+              dataset={dataset}
+              preview={preview}
+              targetColumn={jobForm.target_column}
+            />
+            <AnalysisRecommendationCard
+              onUseRecommendation={handleUseRecommendation}
+              recommendationState={recommendationState}
+            />
+          </div>
+
+          <div className="analysis-column">
+            <section className="card backend-card">
+              <div className="card-head">
+                <div>
+                  <p className="eyebrow">Analysis request</p>
+                  <h2>Create and run analysis</h2>
+                </div>
+                <Badge tone={jobs.length ? "ok" : "neutral"}>{jobs.length} jobs</Badge>
+              </div>
+              <AnalysisDatasetSource cleanResult={cleanResult} dataset={dataset} />
+              <form className="analysis-form" onSubmit={handleCreateJob}>
+                <label>
+                  <span>Analysis type</span>
+                  <select
+                    disabled={!dataset}
+                    onChange={(event) => {
+                      const taskType = event.target.value;
+                      setJobForm((current) => {
+                        const dateColumn = taskType === "forecasting" && (!current.date_column || current.date_column === current.target_column)
+                          ? (preview?.columns || []).find((column) => column !== current.target_column) || ""
+                          : current.date_column;
+                        return { ...current, date_column: dateColumn, task_type: taskType };
+                      });
+                    }}
+                    value={jobForm.task_type}
+                  >
+                    <option value="classification">Classification</option>
+                    <option value="regression">Regression</option>
+                    <option value="forecasting">Forecasting</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Target column</span>
+                  <select
+                    disabled={!dataset}
+                    onChange={(event) => {
+                      const targetColumn = event.target.value;
+                      setJobForm((current) => ({
+                        ...current,
+                        date_column: current.date_column === targetColumn
+                          ? (preview?.columns || []).find((column) => column !== targetColumn) || ""
+                          : current.date_column,
+                        target_column: targetColumn
+                      }));
+                    }}
+                    value={jobForm.target_column}
+                  >
+                    {(preview?.columns || []).map((column) => (
+                      <option key={column} value={column}>{column}</option>
+                    ))}
+                  </select>
+                </label>
+                {jobForm.task_type === "forecasting" ? (
+                  <label>
+                    <span>Date column for forecasting</span>
+                    <select
+                      disabled={!dataset}
+                      onChange={(event) => setJobForm((current) => ({ ...current, date_column: event.target.value }))}
+                      value={jobForm.date_column}
+                    >
+                      {(preview?.columns || []).filter((column) => column !== jobForm.target_column).map((column) => (
+                        <option key={column} value={column}>{column}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+                <button className="button primary" disabled={!dataset || jobStatus.type === "loading"} type="submit">
+                  Create job
+                </button>
+              </form>
+              <div className="analysis-helper">
+                <p>
+                  {dataset
+                    ? "Create the request, then run it from the recent jobs list."
+                    : "Upload a dataset to enable analysis requests."}
+                </p>
+                {numericColumns.length ? <p>Numeric columns: {numericColumns.slice(0, 4).join(", ")}</p> : null}
+              </div>
+              {jobStatus.message ? <div aria-live="polite" className={`backend-status ${jobStatus.type}`} role="status">{jobStatus.message}</div> : null}
+              {runStatus.message ? <div aria-live="polite" className={`backend-status ${runStatus.type}`} role="status">{runStatus.message}</div> : null}
+              {jobs.length ? (
+                <section className="job-queue" aria-label="Recent analysis jobs">
+                  <div className="section-kicker">
+                    <strong>Recent jobs</strong>
+                    <span>{jobs.slice(0, 4).length} shown</span>
+                  </div>
+                  <div className="job-list">
+                    {jobs.slice(0, 4).map((job) => (
+                      <div className="job-row" key={job.id}>
+                        <span className="job-details">
+                          <strong>#{job.id} {job.task_type}</strong>
+                          <small className="job-file" title={job.dataset_file_name || "Uploaded dataset"}>{job.dataset_file_name || "Uploaded dataset"}</small>
+                          <small className="job-target">Target: {job.target_column}</small>
+                          <small className="job-source">Source: {job.dataset_source_label || "Original uploaded file"}</small>
+                        </span>
+                        <Badge tone={job.status === "failed" ? "err" : job.status === "completed" ? "ok" : "warn"}>{job.status}</Badge>
+                        {isRunnableTask(job.task_type) && job.status === "created" ? (
+                          <button
+                            className="button sm"
+                            disabled={runStatus.type === "loading"}
+                            onClick={() => handleRunJob(job)}
+                            type="button"
+                          >
+                            {runStatus.type === "loading" && runStatus.jobId === job.id ? "Running..." : "Run job"}
+                          </button>
+                        ) : null}
+                        {isRunnableTask(job.task_type) && job.status === "completed" ? (
+                          <button
+                            className="button sm"
+                            disabled={runStatus.type === "loading"}
+                            onClick={() => handleViewResult(job)}
+                            type="button"
+                          >
+                            {runStatus.type === "loading" && runStatus.jobId === job.id ? "Loading..." : "View result"}
+                          </button>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+            </section>
+          </div>
+        </section>
+
+        <section className="supporting-data" aria-label="Supporting dataset details">
+          <AiSummaryCard cleaning={cleaning} dataset={dataset} preview={preview} />
+          <TechnicalAnalysisCard
+            cleanResult={cleanResult}
+            cleanStatus={cleanStatus}
+            dataset={dataset}
+            onCleanDataset={handleCleanDataset}
+            technical={technical}
+          />
+          <DatasetPreviewCard dataset={dataset} preview={preview} />
+        </section>
       </section>
     </main>
   );
