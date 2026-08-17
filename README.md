@@ -1,8 +1,8 @@
 # BasitAnaliz
 
-BasitAnaliz is a local data analysis web application built for the CS395 project. It lets a user register, upload tabular datasets, inspect data quality, clean common dataset issues, create and run analysis jobs, view saved ML results, and generate local plain-language AI explanations.
+BasitAnaliz is a local data analysis web application built for the CS395 project. It lets a user register, upload tabular datasets, inspect data quality, clean common dataset issues, get analysis setup recommendations, create and run analysis jobs, view saved ML results, generate local plain-language AI explanations, and download HTML analysis reports.
 
-The project is designed as a local end-product prototype rather than a cloud-deployed analytics platform. Classification, regression, forecasting, deterministic result guidance, and local Gemma/Ollama explanations are implemented. Report/PDF generation and advanced dashboard polishing remain future work.
+The project is designed as a local end-product prototype rather than a cloud-deployed analytics platform. Classification, regression, forecasting, deterministic result guidance, smart task/target recommendations, local Gemma/Ollama explanations, HTML report generation, and a polished dashboard workflow are implemented.
 
 ## Current Features
 
@@ -12,6 +12,12 @@ The project is designed as a local end-product prototype rather than a cloud-dep
 - Dataset preview table
 - Cleaning report with missing values, duplicate rows, and column type signals
 - Dataset cleaning endpoint
+- Dataset insights derived from backend preview and cleaning data
+- Smart analysis recommendation for:
+  - analysis type
+  - target column
+  - forecasting date column
+- Target explanation and column guidance for risky or useful columns
 - Analysis job creation for:
   - classification
   - regression
@@ -34,7 +40,8 @@ The project is designed as a local end-product prototype rather than a cloud-dep
   - prediction sample
   - deterministic quality level, warnings, and recommended actions
 - Local Gemma/Ollama AI explanation layer using safe summarized result data
-- React dashboard for upload, cleaning, job creation, job running, saved result viewing, and cached AI explanations
+- Cached HTML analysis report generation and download
+- React dashboard for upload, cleaning, setup guidance, job creation, job running, saved result viewing, cached AI explanations, and report download
 
 ## Tech Stack
 
@@ -145,6 +152,7 @@ psql "$DATABASE_URL" -f migrations/001_add_cleaned_file_path.sql
 psql "$DATABASE_URL" -f migrations/002_harden_analysis_jobs.sql
 psql "$DATABASE_URL" -f migrations/003_unique_model_result_per_analysis.sql
 psql "$DATABASE_URL" -f migrations/004_unique_ai_explanation_per_analysis.sql
+psql "$DATABASE_URL" -f migrations/005_create_analysis_reports.sql
 ```
 
 For local AI explanations, install Ollama and download the model:
@@ -201,7 +209,7 @@ npm run build
 The latest checked state passed:
 
 ```text
-Backend tests: 108 passed
+Backend tests: 139 passed
 Frontend build: passed
 ```
 
@@ -225,9 +233,10 @@ Recommended flow:
 6. Confirm each job becomes `completed`.
 7. Confirm metrics, deterministic guidance, and result tables are shown.
 8. Generate a local AI explanation for one completed result.
-9. Refresh the page.
-10. Click `View result` on the completed job.
-11. Confirm the saved result and cached AI explanation load again.
+9. Generate and download an HTML report for one completed result.
+10. Refresh the page.
+11. Click `View result` on the completed job.
+12. Confirm the saved result, cached AI explanation, and report metadata load again.
 
 ## Security Notes
 
@@ -238,18 +247,18 @@ Recommended flow:
 - Local uploaded files are ignored by Git.
 - `.env` files are ignored by Git.
 - Gemma/Ollama receives only summarized ML result facts, not full datasets, raw CSV rows, upload paths, tokens, passwords, or secrets.
+- HTML report content escapes user-controlled values before rendering.
 
 ## Current Limitations
 
 - The saved model artifact is not persisted yet; the app currently persists model results and metrics.
-- Report generation is not part of the current completed flow.
 - The app is intended to run locally; it is not cloud-deployed.
-- The dataset overview chart is still a placeholder and should be replaced or removed in a final polish pass.
+- The recommendation engine is deterministic and heuristic-based; users can still override suggested columns.
+- Local AI explanations require Ollama and the configured Gemma model to be running.
 
 ## Planned Next Work
 
-- Improve final frontend layout symmetry and visual polish.
-- Add smart task/target/date-column recommendations.
-- Replace the placeholder dataset chart with real dataset insight charts.
-- Add report/PDF generation if required for the final deliverable.
-- Add local DevOps/CI practice, such as automated test and build checks.
+- Persist trained model artifacts if prediction serving becomes part of the scope.
+- Add stronger evaluation evidence on final, approved datasets.
+- Add a one-page CS395 digest and final academic report artifacts outside the app code.
+- Expand DevOps practice beyond local test/build checks if needed.
